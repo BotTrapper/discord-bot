@@ -241,6 +241,33 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
       
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20.x'
+        cache: 'npm'
+        
+    - name: Install dependencies and build
+      run: |
+        echo "📦 Installing dependencies..."
+        npm ci
+        echo "🔨 Building project..."
+        npm run build
+        echo "✅ Build completed"
+        
+        # Verify build output
+        echo "📁 Verifying build output..."
+        ls -la dist/
+        echo "📊 Build size:"
+        du -sh dist/
+        
+    - name: Download build artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: dist-20.x
+        path: dist-artifacts/
+      continue-on-error: true
+        
     - name: Deployment readiness check
       run: |
         echo "🚀 All tests passed! Project is ready for deployment."
@@ -250,15 +277,57 @@ jobs:
         echo "✅ Database tests passed"
         echo "✅ Integration tests passed"
         
+        # Verify dist directory exists
+        if [ -d "dist" ]; then
+          echo "✅ Build directory exists"
+          ls -la dist/
+        else
+          echo "❌ Build directory missing"
+          exit 1
+        fi
+        
     - name: Create deployment artifact
       run: |
+        # Verify all required files exist before creating tar
+        echo "📦 Creating deployment artifact..."
+        
+        REQUIRED_FILES=(
+          "package.json"
+          "package-lock.json" 
+          "dist/"
+          "Dockerfile"
+          "docker-compose.yml"
+          ".env.example"
+        )
+        
+        MISSING_FILES=()
+        for file in "${REQUIRED_FILES[@]}"; do
+          if [ ! -e "$file" ]; then
+            MISSING_FILES+=("$file")
+          fi
+        done
+        
+        if [ ${#MISSING_FILES[@]} -gt 0 ]; then
+          echo "❌ Missing required files:"
+          printf '%s\n' "${MISSING_FILES[@]}"
+          echo "Available files:"
+          ls -la
+          exit 1
+        fi
+        
+        # Create deployment package
         tar -czf discord-bot-deployment.tar.gz \
           package.json \
           package-lock.json \
           dist/ \
           Dockerfile \
           docker-compose.yml \
-          .env.example
+          .env.example \
+          README.md
+          
+        echo "✅ Deployment artifact created successfully"
+        echo "📦 Archive contents:"
+        tar -tzf discord-bot-deployment.tar.gz | head -20
           
     - name: Upload deployment artifact
       uses: actions/upload-artifact@v4
