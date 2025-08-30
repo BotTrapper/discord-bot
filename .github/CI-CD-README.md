@@ -162,7 +162,18 @@ Images werden automatisch gepublisht bei Tags und Releases.
 
 ## 🐛 Troubleshooting
 
-### Build Failures
+### Common CI/CD Issues
+
+#### Docker Compose Command Not Found
+```bash
+# GitHub Actions might not have docker-compose installed
+# The pipeline handles this automatically with fallbacks:
+# 1. Try "docker compose" (modern)
+# 2. Try "docker-compose" (legacy) 
+# 3. Fall back to YAML syntax validation
+```
+
+#### Build Failures
 
 ```bash
 # Lokal testen
@@ -171,7 +182,7 @@ npm run build
 npm run test:docker
 ```
 
-### Docker Issues
+#### Docker Issues
 
 ```bash
 # Image lokal bauen und testen
@@ -179,7 +190,7 @@ docker build -t discord-bot:test .
 docker run --rm discord-bot:test node --version
 ```
 
-### Dependencies
+#### Dependencies
 
 ```bash
 # Security Audit

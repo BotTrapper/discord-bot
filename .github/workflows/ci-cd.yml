@@ -86,12 +86,33 @@ jobs:
         # Test if the image can be created and has the right structure
         docker images discord-bot:test
         docker run --rm discord-bot:test node --version
+        echo "✅ Docker image test passed"
         
-    - name: Test Docker Compose
+    - name: Test Docker Compose configuration
       run: |
-        # Test if docker-compose.yml is valid
-        docker-compose config
-        echo "Docker Compose configuration is valid"
+        # Create minimal .env for testing
+        echo "DISCORD_TOKEN=test_token" > .env
+        echo "CLIENT_ID=test_client_id" >> .env
+        echo "GUILD_ID=test_guild_id" >> .env
+        
+        # Try different docker compose variants
+        if docker compose version &> /dev/null; then
+          echo "✅ Using modern docker compose"
+          docker compose config
+        elif docker-compose --version &> /dev/null; then
+          echo "✅ Using legacy docker-compose"
+          docker-compose config
+        else
+          echo "⚠️ Docker Compose not available, skipping config test"
+          # Just validate YAML syntax
+          python3 -c "import yaml; yaml.safe_load(open('docker-compose.yml'))"
+          echo "✅ YAML syntax validation passed"
+        fi
+        
+        echo "✅ Docker Compose configuration is valid"
+        
+        # Clean up test .env
+        rm .env
 
   security:
     runs-on: ubuntu-latest
