@@ -72,14 +72,16 @@ async function addWebhook(interaction: any) {
     // Validate URL
     new URL(url);
     
-    await dbManager.addWebhook(name, url, guildId);
-    WebhookNotification.addWebhook(name, url);
-
-    const embed = EmbedBuilderFeature.createSuccessEmbed(
-      `Webhook "${name}" wurde erfolgreich hinzugefügt!`
-    );
-
-    await interaction.reply({ embeds: [embed] });
+    const success = await WebhookNotification.addWebhook(name, url, guildId);
+    
+    if (success) {
+      const embed = EmbedBuilderFeature.createSuccessEmbed(
+        `Webhook "${name}" wurde erfolgreich hinzugefügt!`
+      );
+      await interaction.reply({ embeds: [embed] });
+    } else {
+      throw new Error('Failed to add webhook');
+    }
   } catch (error) {
     const embed = EmbedBuilderFeature.createErrorEmbed(
       'Fehler beim Hinzufügen des Webhooks. Überprüfe die URL!'
@@ -90,8 +92,12 @@ async function addWebhook(interaction: any) {
 
 async function removeWebhook(interaction: any) {
   const name = interaction.options.getString('name');
+  const guildId = interaction.guild.id;
 
   try {
+    // Remove from database
+    await dbManager.removeWebhook(name, guildId);
+    // Remove from memory cache
     WebhookNotification.removeWebhook(name);
 
     const embed = EmbedBuilderFeature.createSuccessEmbed(

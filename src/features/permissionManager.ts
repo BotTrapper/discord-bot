@@ -1,4 +1,5 @@
 import { PermissionFlagsBits } from 'discord.js';
+import { dbManager } from '../database/database.js';
 
 export interface UserPermissions {
   canManageTickets: boolean;
@@ -39,7 +40,32 @@ export class PermissionManager {
     };
   }
 
-  static hasPermission(interaction: any, requiredPermission: keyof UserPermissions): boolean {
+  // Save user permissions to database
+  static async setUserPermissions(userId: string, guildId: string, role: string, permissions: UserPermissions) {
+    try {
+      await dbManager.setUserPermissions(userId, guildId, role, permissions);
+      return true;
+    } catch (error) {
+      console.error('Error setting user permissions:', error);
+      return false;
+    }
+  }
+
+  // Get user permissions from database
+  static async getUserPermissionsFromDB(userId: string, guildId: string): Promise<UserPermissions | null> {
+    try {
+      const userPerm = await dbManager.getUserPermissions(userId, guildId) as any;
+      if (userPerm && userPerm.permissions) {
+        return JSON.parse(userPerm.permissions);
+      }
+      return null;
+    } catch (error) {
+      console.error('Error getting user permissions:', error);
+      return null;
+    }
+  }
+
+  static async hasPermission(interaction: any, requiredPermission: keyof UserPermissions): Promise<boolean> {
     const member = interaction.member;
     
     // Bot owner always has all permissions
@@ -52,7 +78,13 @@ export class PermissionManager {
       return true;
     }
 
-    // Check specific permissions based on roles
+    // Check database permissions first
+    const dbPermissions = await this.getUserPermissionsFromDB(member.id, interaction.guild.id);
+    if (dbPermissions) {
+      return dbPermissions[requiredPermission];
+    }
+
+    // Fall back to role-based permissions
     const permissions = this.getUserPermissions(member);
     return permissions[requiredPermission];
   }
@@ -73,26 +105,26 @@ export class PermissionManager {
     return this.getDefaultPermissions();
   }
 
-  static checkCommandPermission(interaction: any, commandName: string): boolean {
+  static async checkCommandPermission(interaction: any, commandName: string): Promise<boolean> {
     switch (commandName) {
       case 'ticket':
         const subcommand = interaction.options.getSubcommand();
         if (subcommand === 'create') {
           return true; // Everyone can create tickets
         }
-        return this.hasPermission(interaction, 'canManageTickets');
+        return await this.hasPermission(interaction, 'canManageTickets');
 
       case 'autoresponse':
-        return this.hasPermission(interaction, 'canManageAutoResponses');
+        return await this.hasPermission(interaction, 'canManageAutoResponses');
 
       case 'webhook':
-        return this.hasPermission(interaction, 'canManageWebhooks');
+        return await this.hasPermission(interaction, 'canManageWebhooks');
 
       case 'stats':
-        return this.hasPermission(interaction, 'canViewStats');
+        return await this.hasPermission(interaction, 'canViewStats');
 
       case 'embed':
-        return this.hasPermission(interaction, 'canUseEmbedBuilder');
+        return await this.hasPermission(interaction, 'canUseEmbedBuilder');
 
       default:
         return true;

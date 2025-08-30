@@ -3,6 +3,7 @@ import { AutoResponseFeature } from './features/autoResponse.js';
 import { WebhookNotification } from './features/webhookNotification.js';
 import { PermissionManager } from './features/permissionManager.js';
 import { dbManager } from './database/database.js';
+import { initializeDatabase, initializeGuildDefaults } from './database/migrations.js';
 import { startApiServer } from './api/server.js';
 import * as ticketCommand from './commands/ticket.js';
 import * as embedCommand from './commands/embed.js';
@@ -53,6 +54,26 @@ async function registerCommands() {
   }
 }
 
+// Initialize data from database for all guilds
+async function initializeGuildData() {
+  try {
+    // Initialize database first
+    await initializeDatabase();
+    
+    const guilds = client.guilds.cache;
+    for (const [guildId, guild] of guilds) {
+      // Initialize default data for guild
+      await initializeGuildDefaults(guildId);
+      
+      // Load webhooks from database into memory cache
+      await WebhookNotification.loadWebhooks(guildId);
+    }
+    console.log('✅ Guild data initialized from database');
+  } catch (error) {
+    console.error('❌ Error initializing guild data:', error);
+  }
+}
+
 client.once('ready', async () => {
   console.log(`🤖 Logged in as ${client.user?.tag}!`);
   
@@ -62,21 +83,23 @@ client.once('ready', async () => {
   // Register commands
   await registerCommands();
   
-  // Load webhooks from database
-  try {
-    const guilds = client.guilds.cache;
-    for (const [guildId, guild] of guilds) {
-      const webhooks = await dbManager.getWebhooks(guildId) as any[];
-      webhooks.forEach(webhook => {
-        WebhookNotification.addWebhook(webhook.name, webhook.url);
-      });
-    }
-    console.log('✅ Webhooks loaded from database');
-  } catch (error) {
-    console.error('❌ Error loading webhooks:', error);
-  }
+  // Initialize guild data from database
+  await initializeGuildData();
   
   console.log('🚀 Bot is fully ready!');
+});
+
+// Handle new guilds
+client.on('guildCreate', async (guild) => {
+  console.log(`🎉 Bot added to new guild: ${guild.name} (${guild.id})`);
+  
+  // Initialize default data for new guild
+  await initializeGuildDefaults(guild.id);
+  
+  // Load webhooks from database
+  await WebhookNotification.loadWebhooks(guild.id);
+  
+  console.log(`✅ Guild ${guild.name} initialized`);
 });
 
 // Handle slash commands
@@ -85,8 +108,9 @@ client.on('interactionCreate', async (interaction: Interaction) => {
     const command = commands.get(interaction.commandName);
     if (!command) return;
 
-    // Check permissions
-    if (!PermissionManager.checkCommandPermission(interaction, interaction.commandName)) {
+    // Check permissions (now async)
+    const hasPermission = await PermissionManager.checkCommandPermission(interaction, interaction.commandName);
+    if (!hasPermission) {
       await interaction.reply({ 
         content: '❌ Du hast keine Berechtigung für diesen Befehl!', 
         ephemeral: true 
@@ -175,7 +199,7 @@ client.on('messageCreate', async (message) => {
   if (message.author.bot || !message.guild) return;
 
   try {
-    // Check database for auto responses
+    // Get auto responses from database
     const responses = await dbManager.getAutoResponses(message.guild.id) as any[];
     const autoResponse = responses.find(r => 
       message.content.toLowerCase().includes(r.trigger_word.toLowerCase())

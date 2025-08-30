@@ -1,16 +1,69 @@
 # Discord Bot - TypeScript
 
+[![CI/CD Pipeline](https://github.com/BotTrapper/discord-bot/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/BotTrapper/discord-bot/actions/workflows/ci-cd.yml)
+[![Docker Build](https://github.com/BotTrapper/discord-bot/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/BotTrapper/discord-bot/actions/workflows/docker-publish.yml)
+[![Dependency Check](https://github.com/BotTrapper/discord-bot/actions/workflows/dependency-check.yml/badge.svg)](https://github.com/BotTrapper/discord-bot/actions/workflows/dependency-check.yml)
+
 🤖 Ein vollständiger Discord Bot mit TypeScript, SQLite und Express API.
 
 ## 🚀 Features
 
 - **Slash Commands**: Moderne Discord-Interaktionen
-- **Ticket System**: Automatisierte Support-Tickets  
+- **Ticket System**: Automatisierte Support-Tickets mit kompletter Persistierung
 - **Embed Builder**: Schöne Discord-Nachrichten erstellen
-- **Auto Response**: Automatische Antworten auf Nachrichten
-- **Webhook Notifications**: Externe Benachrichtigungen
+- **Auto Response**: Automatische Antworten auf Nachrichten (persistent)
+- **Webhook Notifications**: Externe Benachrichtigungen (persistent)
+- **Permission System**: Erweiterte Benutzerberechtigungen (persistent)
 - **REST API**: Vollständige API für Frontend-Integration
-- **SQLite Database**: Persistente Datenspeicherung
+- **SQLite Database**: Vollständige Persistierung aller Bot-Daten
+- **🔄 Restart-Safe**: Alle Einstellungen bleiben nach Bot-Neustart erhalten
+
+## � CI/CD Pipeline
+
+Dieses Projekt verwendet GitHub Actions für automatisierte Tests und Deployment:
+
+- ✅ **Automated Testing**: TypeScript Build, Type-Checking, Integration Tests
+- ✅ **Docker Build**: Multi-Stage Docker Build mit Optimierungen  
+- ✅ **Security Checks**: NPM Audit, Secrets Scanning
+- ✅ **Database Testing**: SQLite Initialisierung und Connection Tests
+- ✅ **Multi-Node Support**: Tests mit Node.js 18.x und 20.x
+- ✅ **Deployment Ready**: Automatische Deployment-Artefakte für Production
+
+### Quick Commands
+
+```bash
+# Development
+npm run dev
+
+# Build & Test
+npm run build
+npm test
+npm run type-check
+
+# Docker (local)
+docker build -t discord-bot .
+docker-compose up -d
+```
+
+📖 **Vollständige CI/CD Dokumentation**: [.github/CI-CD-README.md](.github/CI-CD-README.md)
+
+## �💾 Persistierung
+
+Der Bot speichert **alle** wichtigen Daten persistent in einer SQLite-Datenbank:
+
+- ✅ **Auto-Responses**: Automatische Antworten bleiben nach Neustart erhalten
+- ✅ **Webhooks**: Webhook-Konfigurationen werden automatisch geladen
+- ✅ **Tickets**: Vollständige Ticket-Historie und Status
+- ✅ **User-Permissions**: Benutzerdefinierte Berechtigungen
+- ✅ **Bot-Statistiken**: Command-Usage und Analytics
+- ✅ **Guild-Settings**: Alle Server-spezifischen Einstellungen
+
+### Automatische Initialisierung
+
+Beim ersten Start werden Standard-Einstellungen automatisch erstellt:
+- Standard Auto-Response für "hallo", "help", "danke"  
+- Leere Webhook- und Permissions-Tabellen
+- Vollständige Datenbankstruktur
 
 ## 📋 Voraussetzungen
 

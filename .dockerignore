@@ -4,7 +4,45 @@ npm-debug.log
 .gitignore
 README.md
 .env
-.nyc_output
-coverage
 .env.local
 .env.*.local
+.nyc_output
+coverage
+
+# CI/CD related files
+.github/
+.vscode/
+.idea/
+
+# Build artifacts (will be built inside container)
+dist/
+
+# Development files
+*.log
+*.pid
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test files
+test/
+tests/
+*.test.js
+*.test.ts
+
+# Documentation
+docs/
+*.md
+!README.md
+
+# Database files (will be created in container)
+*.db
+*.sqlite
+*.sqlite3
+
+# Temporary files
+tmp/
+temp/

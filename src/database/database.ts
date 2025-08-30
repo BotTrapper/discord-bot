@@ -237,6 +237,60 @@ export class DatabaseManager {
     });
   }
 
+  async removeWebhook(name: string, guildId: string) {
+    return new Promise((resolve, reject) => {
+      this.db.run(
+        `DELETE FROM webhooks WHERE name = ? AND guild_id = ?`,
+        [name, guildId],
+        function(err) {
+          if (err) reject(err);
+          else resolve(this.changes);
+        }
+      );
+    });
+  }
+
+  // User permissions methods
+  async setUserPermissions(userId: string, guildId: string, role: string, permissions: any) {
+    return new Promise((resolve, reject) => {
+      this.db.run(
+        `INSERT OR REPLACE INTO user_permissions (user_id, guild_id, role, permissions) 
+         VALUES (?, ?, ?, ?)`,
+        [userId, guildId, role, JSON.stringify(permissions)],
+        function(err) {
+          if (err) reject(err);
+          else resolve(this.lastID);
+        }
+      );
+    });
+  }
+
+  async getUserPermissions(userId: string, guildId: string) {
+    return new Promise((resolve, reject) => {
+      this.db.get(
+        `SELECT * FROM user_permissions WHERE user_id = ? AND guild_id = ?`,
+        [userId, guildId],
+        (err, row) => {
+          if (err) reject(err);
+          else resolve(row);
+        }
+      );
+    });
+  }
+
+  async getAllUserPermissions(guildId: string) {
+    return new Promise((resolve, reject) => {
+      this.db.all(
+        `SELECT * FROM user_permissions WHERE guild_id = ?`,
+        [guildId],
+        (err, rows) => {
+          if (err) reject(err);
+          else resolve(rows);
+        }
+      );
+    });
+  }
+
   close() {
     this.db.close();
   }

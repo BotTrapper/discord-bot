@@ -1,0 +1,55 @@
+name: Dependency Check
+
+on:
+  schedule:
+    - cron: '0 2 * * 1' # Every Monday at 2 AM
+  workflow_dispatch:
+  
+jobs:
+  dependency-check:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20.x'
+        cache: 'npm'
+        
+    - name: Install dependencies
+      run: npm ci
+      
+    - name: Check for outdated dependencies
+      run: |
+        echo "Checking for outdated dependencies..."
+        npm outdated || echo "Some dependencies may be outdated"
+        
+    - name: Security audit
+      run: |
+        npm audit --audit-level high || echo "Security vulnerabilities found"
+        
+    - name: Check Discord.js version compatibility
+      run: |
+        echo "Checking Discord.js version..."
+        npm list discord.js
+        
+    - name: Generate dependency report
+      run: |
+        echo "# Dependency Report" > dependency-report.md
+        echo "Generated on: $(date)" >> dependency-report.md
+        echo "" >> dependency-report.md
+        echo "## Outdated Packages" >> dependency-report.md
+        npm outdated --json | jq -r 'to_entries[] | "- \(.key): \(.value.current) → \(.value.wanted)"' >> dependency-report.md || echo "No outdated packages" >> dependency-report.md
+        echo "" >> dependency-report.md
+        echo "## Security Audit" >> dependency-report.md
+        npm audit --json | jq -r '.vulnerabilities | to_entries[] | "- \(.key): \(.value.severity) severity"' >> dependency-report.md || echo "No vulnerabilities found" >> dependency-report.md
+        
+    - name: Upload dependency report
+      uses: actions/upload-artifact@v4
+      with:
+        name: dependency-report
+        path: dependency-report.md
+        retention-days: 30
