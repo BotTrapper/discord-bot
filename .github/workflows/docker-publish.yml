@@ -71,4 +71,4 @@ jobs:
         
     - name: Test Docker image
       run: |
-        docker run --rm ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }} node --version
+        docker run --rm ghcr.io/bottrapper/discord-bot:main node --version

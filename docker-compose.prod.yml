@@ -3,8 +3,8 @@ version: '3.8'
 
 services:
   discord-bot:
-    # Verwende Registry Image
-    image: ghcr.io/bottrapper/discord-bot:latest
+    # Verwende das frisch gebaute Registry Image
+    image: ghcr.io/bottrapper/discord-bot:main
     container_name: discord-bot-prod
     restart: unless-stopped
     ports:
