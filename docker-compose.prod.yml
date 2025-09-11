@@ -11,10 +11,11 @@ services:
       - "3001:3001"
     environment:
       - NODE_ENV=production
+      - DATABASE_PATH=/app/data/bot.db
     env_file:
       - .env
     volumes:
-      - ./data:/app/data
+      - ./data:/app/data:rw
     healthcheck:
       test: ["CMD", "node", "-e", "console.log('Health check passed')"]
       interval: 30s

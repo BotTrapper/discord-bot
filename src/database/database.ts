@@ -6,7 +6,27 @@ export class DatabaseManager {
 
   constructor() {
     const dbPath = process.env.DATABASE_PATH || './data/bot.db';
-    this.db = new sqlite3.Database(dbPath);
+    console.log('🔧 Database path:', dbPath);
+    
+    // Ensure directory exists
+    const path = require('path');
+    const fs = require('fs');
+    const dbDir = path.dirname(dbPath);
+    
+    if (!fs.existsSync(dbDir)) {
+      console.log('📁 Creating database directory:', dbDir);
+      fs.mkdirSync(dbDir, { recursive: true });
+    }
+    
+    console.log('🗄️ Opening SQLite database...');
+    this.db = new sqlite3.Database(dbPath, (err) => {
+      if (err) {
+        console.error('❌ Database connection failed:', err);
+      } else {
+        console.log('✅ Database connected successfully!');
+      }
+    });
+    
     this.initializeTables();
   }
 
