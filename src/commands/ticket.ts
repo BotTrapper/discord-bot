@@ -1,4 +1,4 @@
-import { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, PermissionFlagsBits } from 'discord.js';
+import { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, PermissionFlagsBits, MessageFlags } from 'discord.js';
 
 export const data = new SlashCommandBuilder()
   .setName('ticket')
@@ -42,83 +42,99 @@ async function createTicket(interaction: any) {
   const guild = interaction.guild;
   const user = interaction.user;
 
+  // SOFORTIGER REPLY - Verhindert Interaction Timeout
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral }); // Modern flags syntax
+
   // Check if user already has a ticket
   const existingChannel = guild.channels.cache.find((channel: any) => 
     channel.name === `ticket-${user.username.toLowerCase()}`
   );
 
   if (existingChannel) {
-    await interaction.reply({ content: 'Du hast bereits ein offenes Ticket!', ephemeral: true });
+    await interaction.editReply({ content: 'Du hast bereits ein offenes Ticket!' });
     return;
   }
 
-  // Create ticket channel
-  const ticketChannel = await guild.channels.create({
-    name: `ticket-${user.username}`,
-    type: 0, // Text channel
-    permissionOverwrites: [
-      {
-        id: guild.roles.everyone.id,
-        deny: [PermissionFlagsBits.ViewChannel],
-      },
-      {
-        id: user.id,
-        allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages],
-      },
-    ],
-  });
-
-  // Save ticket to database
   try {
-    const { dbManager } = await import('../database/database.js');
-    await dbManager.createTicket({
-      userId: user.id,
-      username: user.username,
-      reason,
-      channelId: ticketChannel.id,
-      guildId: guild.id
+    // Create ticket channel
+    const ticketChannel = await guild.channels.create({
+      name: `ticket-${user.username}`,
+      type: 0, // Text channel
+      permissionOverwrites: [
+        {
+          id: guild.roles.everyone.id,
+          deny: [PermissionFlagsBits.ViewChannel],
+        },
+        {
+          id: user.id,
+          allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages],
+        },
+      ],
     });
 
-    // Send webhook notification
-    try {
-      const { WebhookNotification } = await import('../features/webhookNotification.js');
-      await WebhookNotification.sendTicketNotification('tickets', {
-        user: user.toString(),
-        reason,
-        channelName: ticketChannel.name,
-        action: 'created'
-      });
-    } catch (webhookError) {
-      console.log('Webhook notification failed:', webhookError);
-    }
+    // Asynchrone Operationen nach Channel-Erstellung
+    Promise.all([
+      // Save to database
+      (async () => {
+        try {
+          const { dbManager } = await import('../database/database.js');
+          await dbManager.createTicket({
+            userId: user.id,
+            username: user.username,
+            reason,
+            channelId: ticketChannel.id,
+            guildId: guild.id
+          });
+        } catch (error) {
+          console.error('Error saving ticket to database:', error);
+        }
+      })(),
+      
+      // Send webhook notification
+      (async () => {
+        try {
+          const { WebhookNotification } = await import('../features/webhookNotification.js');
+          await WebhookNotification.sendTicketNotification('tickets', {
+            user: user.toString(),
+            reason,
+            channelName: ticketChannel.name,
+            action: 'created'
+          });
+        } catch (webhookError) {
+          console.log('Webhook notification failed:', webhookError);
+        }
+      })()
+    ]);
+
+    const embed = new EmbedBuilder()
+      .setTitle('🎫 Neues Ticket')
+      .setDescription(`**Grund:** ${reason}\n**Erstellt von:** ${user}`)
+      .setColor(0x00AE86)
+      .setTimestamp();
+
+    const closeButton = new ActionRowBuilder()
+      .addComponents(
+        new ButtonBuilder()
+          .setCustomId('close_ticket')
+          .setLabel('Ticket schließen')
+          .setStyle(ButtonStyle.Danger)
+          .setEmoji('🔒')
+      );
+
+    await ticketChannel.send({ embeds: [embed], components: [closeButton] });
+    await interaction.editReply({ content: `Ticket erstellt: ${ticketChannel}` });
+
   } catch (error) {
-    console.error('Error saving ticket to database:', error);
+    console.error('Error creating ticket:', error);
+    await interaction.editReply({ content: '❌ Fehler beim Erstellen des Tickets!' });
   }
-
-  const embed = new EmbedBuilder()
-    .setTitle('🎫 Neues Ticket')
-    .setDescription(`**Grund:** ${reason}\n**Erstellt von:** ${user}`)
-    .setColor(0x00AE86)
-    .setTimestamp();
-
-  const closeButton = new ActionRowBuilder()
-    .addComponents(
-      new ButtonBuilder()
-        .setCustomId('close_ticket')
-        .setLabel('Ticket schließen')
-        .setStyle(ButtonStyle.Danger)
-        .setEmoji('🔒')
-    );
-
-  await ticketChannel.send({ embeds: [embed], components: [closeButton] });
-  await interaction.reply({ content: `Ticket erstellt: ${ticketChannel}`, ephemeral: true });
 }
 
 async function closeTicket(interaction: any) {
   const channel = interaction.channel;
   
   if (!channel.name.startsWith('ticket-')) {
-    await interaction.reply({ content: 'Dieser Befehl kann nur in Ticket-Kanälen verwendet werden!', ephemeral: true });
+    await interaction.reply({ content: 'Dieser Befehl kann nur in Ticket-Kanälen verwendet werden!', flags: MessageFlags.Ephemeral });
     return;
   }
 

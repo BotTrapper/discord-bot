@@ -162,7 +162,7 @@ export class DatabaseManager {
   }) {
     return new Promise((resolve, reject) => {
       this.db.run(
-        `INSERT INTO auto_responses (trigger_word, response_text, is_embed, embed_title, embed_description, embed_color, guild_id) 
+        `INSERT OR IGNORE INTO auto_responses (trigger_word, response_text, is_embed, embed_title, embed_description, embed_color, guild_id) 
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
         [responseData.trigger, responseData.response, responseData.isEmbed, 
          responseData.embedTitle, responseData.embedDescription, responseData.embedColor, responseData.guildId],

@@ -42,14 +42,16 @@ export class WebhookNotification {
   static async sendNotification(webhookName: string, data: WebhookData) {
     const url = this.webhookUrls.get(webhookName);
     if (!url) {
-      throw new Error(`Webhook "${webhookName}" nicht gefunden`);
+      console.log(`⚠️ Webhook "${webhookName}" nicht konfiguriert - Überspringe Notification`);
+      return false; // Nicht mehr werfen, sondern graceful handling
     }
 
     try {
       await axios.post(url, data);
+      console.log(`✅ Webhook "${webhookName}" erfolgreich gesendet`);
       return true;
     } catch (error) {
-      console.error(`Fehler beim Senden der Webhook-Nachricht:`, error);
+      console.error(`❌ Fehler beim Senden der Webhook-Nachricht "${webhookName}":`, error);
       return false;
     }
   }
