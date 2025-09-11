@@ -5,7 +5,8 @@ export class DatabaseManager {
   private db: Database;
 
   constructor() {
-    this.db = new sqlite3.Database('bot_data.db');
+    const dbPath = process.env.DATABASE_PATH || './data/bot.db';
+    this.db = new sqlite3.Database(dbPath);
     this.initializeTables();
   }
 

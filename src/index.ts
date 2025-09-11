@@ -30,7 +30,7 @@ commands.set(statsCommand.data.name, statsCommand);
 
 const TOKEN = process.env.DISCORD_TOKEN || '';
 const CLIENT_ID = process.env.CLIENT_ID || '';
-const GUILD_ID = process.env.GUILD_ID || '';
+const GUILD_ID = process.env.GUILD_ID || ''; // Optional: nur für Development/Testing
 
 const commandsData = [
   ticketCommand.data.toJSON(),
@@ -44,11 +44,21 @@ const rest = new REST({ version: '10' }).setToken(TOKEN);
 
 async function registerCommands() {
   try {
-    await rest.put(
-      Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
-      { body: commandsData },
-    );
-    console.log('✅ Slash commands registered.');
+    if (GUILD_ID) {
+      // Development: Register commands für einen spezifischen Server (sofort verfügbar)
+      await rest.put(
+        Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
+        { body: commandsData },
+      );
+      console.log('✅ Guild-specific slash commands registered.');
+    } else {
+      // Production: Register global commands (verfügbar auf allen Servern)
+      await rest.put(
+        Routes.applicationCommands(CLIENT_ID),
+        { body: commandsData },
+      );
+      console.log('✅ Global slash commands registered for all servers.');
+    }
   } catch (error) {
     console.error('❌ Error registering commands:', error);
   }
