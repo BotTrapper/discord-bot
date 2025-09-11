@@ -1,5 +1,7 @@
 import sqlite3 from 'sqlite3';
 import { Database } from 'sqlite3';
+import path from 'path';
+import fs from 'fs';
 
 export class DatabaseManager {
   private db: Database;
@@ -9,8 +11,6 @@ export class DatabaseManager {
     console.log('🔧 Database path:', dbPath);
     
     // Ensure directory exists
-    const path = require('path');
-    const fs = require('fs');
     const dbDir = path.dirname(dbPath);
     
     if (!fs.existsSync(dbDir)) {
