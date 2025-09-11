@@ -1,12 +1,11 @@
+# Production Docker-Compose mit Registry Image
 version: '3.8'
 
 services:
   discord-bot:
-    # Lokales Build (immer funktioniert)
-    build: .
-    # Registry Image (nur wenn verfügbar)
-    # image: ghcr.io/bottrapper/discord-bot:latest
-    container_name: discord-bot
+    # Verwende Registry Image
+    image: ghcr.io/bottrapper/discord-bot:latest
+    container_name: discord-bot-prod
     restart: unless-stopped
     ports:
       - "3001:3001"
