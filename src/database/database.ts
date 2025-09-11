@@ -131,6 +131,32 @@ export class DatabaseManager {
     });
   }
 
+  async deleteTicket(ticketId: number) {
+    return new Promise((resolve, reject) => {
+      this.db.run(
+        `DELETE FROM tickets WHERE id = ?`,
+        [ticketId],
+        function(err) {
+          if (err) reject(err);
+          else resolve(this.changes);
+        }
+      );
+    });
+  }
+
+  async getTicketById(ticketId: number, guildId: string) {
+    return new Promise((resolve, reject) => {
+      this.db.get(
+        `SELECT * FROM tickets WHERE id = ? AND guild_id = ?`,
+        [ticketId, guildId],
+        (err, row) => {
+          if (err) reject(err);
+          else resolve(row);
+        }
+      );
+    });
+  }
+
   async getTickets(guildId: string, status?: string) {
     return new Promise((resolve, reject) => {
       let query = `SELECT * FROM tickets WHERE guild_id = ?`;
@@ -275,8 +301,7 @@ export class DatabaseManager {
   async setUserPermissions(userId: string, guildId: string, role: string, permissions: any) {
     return new Promise((resolve, reject) => {
       this.db.run(
-        `INSERT OR REPLACE INTO user_permissions (user_id, guild_id, role, permissions) 
-         VALUES (?, ?, ?, ?)`,
+        `INSERT OR REPLACE INTO user_permissions (user_id, guild_id, role, permissions) VALUES (?, ?, ?, ?)`,
         [userId, guildId, role, JSON.stringify(permissions)],
         function(err) {
           if (err) reject(err);
@@ -286,24 +311,51 @@ export class DatabaseManager {
     });
   }
 
-  async getUserPermissions(userId: string, guildId: string) {
+  // Dashboard-specific methods
+  async getTicketCount(guildId: string, status?: string) {
+    return new Promise((resolve, reject) => {
+      let query = `SELECT COUNT(*) as count FROM tickets WHERE guild_id = ?`;
+      const params = [guildId];
+
+      if (status) {
+        query += ` AND status = ?`;
+        params.push(status);
+      }
+
+      this.db.get(query, params, (err, row: any) => {
+        if (err) reject(err);
+        else resolve(row?.count || 0);
+      });
+    });
+  }
+
+  async getAutoResponseCount(guildId: string) {
     return new Promise((resolve, reject) => {
       this.db.get(
-        `SELECT * FROM user_permissions WHERE user_id = ? AND guild_id = ?`,
-        [userId, guildId],
-        (err, row) => {
+        `SELECT COUNT(*) as count FROM auto_responses WHERE guild_id = ?`,
+        [guildId],
+        (err, row: any) => {
           if (err) reject(err);
-          else resolve(row);
+          else resolve(row?.count || 0);
         }
       );
     });
   }
 
-  async getAllUserPermissions(guildId: string) {
+  async getRecentActivity(guildId: string, limit: number = 10) {
     return new Promise((resolve, reject) => {
       this.db.all(
-        `SELECT * FROM user_permissions WHERE guild_id = ?`,
-        [guildId],
+        `SELECT 'ticket' as type, 'Ticket created: ' || reason as description, created_at as timestamp
+         FROM tickets WHERE guild_id = ?
+         UNION ALL
+         SELECT 'autoresponse' as type, 'Auto-response added: ' || trigger_word as description, created_at as timestamp
+         FROM auto_responses WHERE guild_id = ?
+         UNION ALL
+         SELECT 'command' as type, 'Command used: ' || command_name as description, executed_at as timestamp
+         FROM bot_stats WHERE guild_id = ?
+         ORDER BY timestamp DESC
+         LIMIT ?`,
+        [guildId, guildId, guildId, limit],
         (err, rows) => {
           if (err) reject(err);
           else resolve(rows);

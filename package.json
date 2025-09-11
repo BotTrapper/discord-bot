@@ -6,10 +6,12 @@
   "type": "module",
   "scripts": {
     "start": "node dist/index.js",
-    "start:dev": "ts-node --esm src/index.ts",
-    "dev": "ts-node --esm --watch src/index.ts",
+    "start:dev": "tsx src/index.ts",
+    "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "build:watch": "tsc --watch",
+    "dev:build": "npm run build && npm run start",
+    "dev:hot": "concurrently \"npm run build:watch\" \"nodemon dist/index.js\"",
     "clean": "rm -rf dist/",
     "type-check": "tsc --noEmit",
     "test": "npm run test:unit && npm run test:integration",
@@ -38,11 +40,17 @@
     "discord.js": "^14.22.1",
     "dotenv": "^17.2.1",
     "express": "^5.1.0",
+    "express-session": "^1.18.2",
     "jsonwebtoken": "^9.0.2",
+    "passport": "^0.7.0",
+    "passport-discord": "^0.1.4",
     "sqlite3": "^5.1.7",
     "ts-node": "^10.9.2"
   },
   "devDependencies": {
+    "concurrently": "^9.0.1",
+    "nodemon": "^3.1.7",
+    "tsx": "^4.19.1",
     "typescript": "^5.9.2"
   }
 }

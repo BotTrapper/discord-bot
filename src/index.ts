@@ -4,7 +4,7 @@ import { WebhookNotification } from './features/webhookNotification.js';
 import { PermissionManager } from './features/permissionManager.js';
 import { dbManager } from './database/database.js';
 import { initializeDatabase, initializeGuildDefaults } from './database/migrations.js';
-import { startApiServer } from './api/server.js';
+import { startApiServer, setDiscordClient } from './api/server.js';
 import * as ticketCommand from './commands/ticket.js';
 import * as embedCommand from './commands/embed.js';
 import * as autoresponseCommand from './commands/autoresponse.js';
@@ -84,175 +84,209 @@ async function initializeGuildData() {
   }
 }
 
-client.once('ready', async () => {
-  console.log(`🤖 Logged in as ${client.user?.tag}!`);
-  
-  // Start API server
-  startApiServer();
-  
-  // Register commands
-  await registerCommands();
-  
-  // Initialize guild data from database
-  await initializeGuildData();
-  
-  console.log('🚀 Bot is fully ready!');
-});
+// Starte den API Server und verbinde den Discord Client
+async function main() {
+  try {
+    await initializeDatabase();
 
-// Handle new guilds
-client.on('guildCreate', async (guild) => {
-  console.log(`🎉 Bot added to new guild: ${guild.name} (${guild.id})`);
-  
-  // Initialize default data for new guild
-  await initializeGuildDefaults(guild.id);
-  
-  // Load webhooks from database
-  await WebhookNotification.loadWebhooks(guild.id);
-  
-  console.log(`✅ Guild ${guild.name} initialized`);
-});
+    client.once('ready', async () => {
+      console.log(`✅ Bot is ready! Logged in as ${client.user?.tag}`);
 
-// Handle slash commands
-client.on('interactionCreate', async (interaction: Interaction) => {
-  if (interaction.isChatInputCommand()) {
-    const command = commands.get(interaction.commandName);
-    if (!command) return;
+      // Verbinde den Discord Client mit dem API Server
+      setDiscordClient(client);
 
-    // Check permissions (now async)
-    const hasPermission = await PermissionManager.checkCommandPermission(interaction, interaction.commandName);
-    if (!hasPermission) {
-      await interaction.reply({ 
-        content: '❌ Du hast keine Berechtigung für diesen Befehl!', 
-        ephemeral: true 
-      });
-      return;
-    }
+      // Register commands
+      await registerCommands();
 
-    try {
-      // Log command usage
-      await dbManager.logCommand(
-        interaction.commandName, 
-        interaction.user.id, 
-        interaction.guild?.id || 'DM'
-      );
+      // Initialize guild data from database
+      await initializeGuildData();
 
-      await (command as any).execute(interaction);
-    } catch (error) {
-      console.error('Command execution error:', error);
-      
-      const reply = { content: '❌ Es gab einen Fehler beim Ausführen des Befehls!', ephemeral: true };
-      
-      if (interaction.replied || interaction.deferred) {
-        await interaction.followUp(reply);
-      } else {
-        await interaction.reply(reply);
-      }
-    }
-  }
+      console.log('🚀 Bot is fully ready!');
+    });
 
-  // Handle button interactions
-  if (interaction.isButton()) {
-    if (interaction.customId === 'close_ticket') {
-      const channel = interaction.channel;
-      
-      if (!channel || !('name' in channel) || !channel.name?.startsWith('ticket-')) {
-        await interaction.reply({ content: '❌ Dieser Button kann nur in Ticket-Kanälen verwendet werden!', ephemeral: true });
-        return;
-      }
+    // Handle new guilds
+    client.on('guildCreate', async (guild) => {
+      console.log(`🎉 Bot added to new guild: ${guild.name} (${guild.id})`);
 
-      // Find ticket in database and close it
-      try {
-        const tickets = await dbManager.getTickets(interaction.guild!.id, 'open') as any[];
-        const ticket = tickets.find(t => t.channel_id === channel.id);
-        
-        if (ticket) {
-          await dbManager.closeTicket(ticket.id);
-          
-          // Send webhook notification
+      // Initialize default data for new guild
+      await initializeGuildDefaults(guild.id);
+
+      // Load webhooks from database
+      await WebhookNotification.loadWebhooks(guild.id);
+
+      console.log(`✅ Guild ${guild.name} initialized`);
+    });
+
+    // Handle slash commands
+    client.on('interactionCreate', async (interaction: Interaction) => {
+      if (interaction.isChatInputCommand()) {
+        const command = commands.get(interaction.commandName);
+        if (!command) return;
+
+        // Check permissions (now async)
+        const hasPermission = await PermissionManager.checkCommandPermission(interaction, interaction.commandName);
+        if (!hasPermission) {
+          await interaction.reply({
+            content: '❌ Du hast keine Berechtigung für diesen Befehl!',
+            ephemeral: true
+          });
+          return;
+        }
+
+        try {
+          // Log command usage
+          await dbManager.logCommand(
+            interaction.commandName,
+            interaction.user.id,
+            interaction.guild?.id || 'DM'
+          );
+
+          await (command as any).execute(interaction);
+        } catch (error) {
+          console.error('Command execution error:', error);
+
+          const reply = { content: '❌ Es gab einen Fehler beim Ausführen des Befehls!', flags: 64 };
+
           try {
-            await WebhookNotification.sendTicketNotification('tickets', {
-              user: interaction.user.toString(),
-              reason: ticket.reason,
-              channelName: channel.name,
-              action: 'closed'
+            if (interaction.replied || interaction.deferred) {
+              await interaction.followUp(reply);
+            } else {
+              await interaction.reply(reply);
+            }
+          } catch (replyError) {
+            console.error('Failed to send error message to user:', replyError);
+            // Interaction ist wahrscheinlich expired - ignorieren
+          }
+        }
+      }
+
+      // Handle button interactions
+      if (interaction.isButton()) {
+        if (interaction.customId === 'close_ticket') {
+          const channel = interaction.channel;
+
+          if (!channel || !('name' in channel) || !channel.name?.startsWith('ticket-')) {
+            await interaction.reply({ content: '❌ Dieser Button kann nur in Ticket-Kanälen verwendet werden!', flags: 64 });
+            return;
+          }
+
+          // Sofortiger Reply um Timeout zu vermeiden
+          await interaction.deferReply({ flags: 64 });
+
+          // Find ticket in database and close it
+          try {
+            const tickets = await dbManager.getTickets(interaction.guild!.id, 'open') as any[];
+            const ticket = tickets.find(t => t.channel_id === channel.id);
+
+            if (ticket) {
+              await dbManager.closeTicket(ticket.id);
+
+              // Send webhook notification
+              try {
+                await WebhookNotification.sendTicketNotification('tickets', {
+                  user: interaction.user.toString(),
+                  reason: ticket.reason,
+                  channelName: channel.name,
+                  action: 'closed'
+                });
+              } catch (webhookError) {
+                console.log('Webhook notification failed:', webhookError);
+              }
+            }
+          } catch (error) {
+            console.error('Error closing ticket in database:', error);
+          }
+
+          await interaction.editReply({ content: '🔒 Ticket wird in 5 Sekunden geschlossen...' });
+
+          setTimeout(async () => {
+            try {
+              await channel.delete();
+            } catch (error) {
+              console.error('Error deleting channel:', error);
+            }
+          }, 5000);
+        }
+
+        // Kategorie-Ticket Button Handler
+        if (interaction.customId?.startsWith('ticket_')) {
+          const category = interaction.customId.replace('ticket_', '');
+
+          // Import der createCategoryTicket Funktion
+          const { createCategoryTicket } = await import('./commands/ticket.js');
+          await createCategoryTicket(interaction, category);
+        }
+
+        // Legacy Button (für Rückwärtskompatibilität)
+        if (interaction.customId === 'create_ticket_button') {
+          await interaction.reply({
+            content: 'Verwende das neue Ticket-System mit Kategorien! Führe `/ticket setup` aus.',
+            flags: 64
+          });
+        }
+      }
+    });
+
+    // Handle automatic responses
+    client.on('messageCreate', async (message) => {
+      if (message.author.bot || !message.guild) return;
+
+      try {
+        // Get auto responses from database
+        const responses = await dbManager.getAutoResponses(message.guild.id) as any[];
+        const autoResponse = responses.find(r =>
+          message.content.toLowerCase().includes(r.trigger_word.toLowerCase())
+        );
+
+        if (autoResponse) {
+          if (autoResponse.is_embed) {
+            const embed = AutoResponseFeature.createResponseEmbed({
+              trigger: autoResponse.trigger_word,
+              response: autoResponse.response_text,
+              isEmbed: true,
+              embedResponse: {
+                title: autoResponse.embed_title || 'Automatische Antwort',
+                description: autoResponse.embed_description || autoResponse.response_text,
+                color: autoResponse.embed_color || 0x00AE86
+              }
             });
-          } catch (webhookError) {
-            console.log('Webhook notification failed:', webhookError);
+
+            if (embed) {
+              await message.reply({ embeds: [embed] });
+            }
+          } else {
+            await message.reply(autoResponse.response_text);
           }
         }
       } catch (error) {
-        console.error('Error closing ticket in database:', error);
+        console.error('Error handling auto response:', error);
       }
+    });
 
-      await interaction.reply({ content: '🔒 Ticket wird in 5 Sekunden geschlossen...', ephemeral: true });
-      
-      setTimeout(async () => {
-        try {
-          await channel.delete();
-        } catch (error) {
-          console.error('Error deleting channel:', error);
-        }
-      }, 5000);
-    }
+    // Handle process termination
+    process.on('SIGINT', () => {
+      console.log('\n🛑 Bot shutting down...');
+      dbManager.close();
+      client.destroy();
+      process.exit(0);
+    });
 
-    if (interaction.customId === 'create_ticket_button') {
-      await interaction.reply({ 
-        content: 'Verwende `/ticket create <grund>` um ein Ticket zu erstellen.', 
-        ephemeral: true 
-      });
-    }
-  }
-});
+    process.on('SIGTERM', () => {
+      console.log('\n🛑 Bot shutting down...');
+      dbManager.close();
+      client.destroy();
+      process.exit(0);
+    });
 
-// Handle automatic responses
-client.on('messageCreate', async (message) => {
-  if (message.author.bot || !message.guild) return;
+    // Starte den API Server
+    startApiServer();
 
-  try {
-    // Get auto responses from database
-    const responses = await dbManager.getAutoResponses(message.guild.id) as any[];
-    const autoResponse = responses.find(r => 
-      message.content.toLowerCase().includes(r.trigger_word.toLowerCase())
-    );
-
-    if (autoResponse) {
-      if (autoResponse.is_embed) {
-        const embed = AutoResponseFeature.createResponseEmbed({
-          trigger: autoResponse.trigger_word,
-          response: autoResponse.response_text,
-          isEmbed: true,
-          embedResponse: {
-            title: autoResponse.embed_title || 'Automatische Antwort',
-            description: autoResponse.embed_description || autoResponse.response_text,
-            color: autoResponse.embed_color || 0x00AE86
-          }
-        });
-        
-        if (embed) {
-          await message.reply({ embeds: [embed] });
-        }
-      } else {
-        await message.reply(autoResponse.response_text);
-      }
-    }
+    // Login to Discord
+    await client.login(TOKEN);
   } catch (error) {
-    console.error('Error handling auto response:', error);
+    console.error('❌ Failed to start bot:', error);
+    process.exit(1);
   }
-});
+}
 
-// Handle process termination
-process.on('SIGINT', () => {
-  console.log('\n🛑 Bot shutting down...');
-  dbManager.close();
-  client.destroy();
-  process.exit(0);
-});
-
-process.on('SIGTERM', () => {
-  console.log('\n🛑 Bot shutting down...');
-  dbManager.close();
-  client.destroy();
-  process.exit(0);
-});
-
-client.login(TOKEN);
+main();
