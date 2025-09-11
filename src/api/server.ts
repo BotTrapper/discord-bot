@@ -1,12 +1,63 @@
 import 'dotenv/config';
-import express from 'express';
+import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import session from 'express-session';
 import passport from 'passport';
-import { Strategy as DiscordStrategy } from 'passport-discord';
+import { Strategy as DiscordStrategy, Profile } from 'passport-discord';
 import jwt from 'jsonwebtoken';
 import { dbManager } from '../database/database.js';
-import type { Client } from 'discord.js';
+import type {Client, Snowflake} from 'discord.js';
+
+// Request logging middleware
+const requestLogger = (req: Request, res: Response, next: NextFunction) => {
+  const startTime = Date.now();
+  const timestamp = new Date().toISOString();
+
+  // Log request start
+  console.log(`[${timestamp}] ${req.method} ${req.url} - Request started`);
+
+  // Override res.json and res.send to log response
+  const originalJson = res.json;
+  const originalSend = res.send;
+
+  res.json = function(body: any) {
+    const duration = Date.now() - startTime;
+    console.log(`[${new Date().toISOString()}] ${req.method} ${req.url} - ${res.statusCode} - ${duration}ms`);
+    return originalJson.call(this, body);
+  };
+
+  res.send = function(body: any) {
+    const duration = Date.now() - startTime;
+    console.log(`[${new Date().toISOString()}] ${req.method} ${req.url} - ${res.statusCode} - ${duration}ms`);
+    return originalSend.call(this, body);
+  };
+
+  // Log if request takes too long
+  const timeoutWarning = setTimeout(() => {
+    console.warn(`[WARNING] ${req.method} ${req.url} - Request taking longer than 5 seconds`);
+  }, 5000);
+
+  res.on('finish', () => {
+    clearTimeout(timeoutWarning);
+  });
+
+  next();
+};
+
+// Extend Express Request type to include user
+declare global {
+  namespace Express {
+    interface User {
+      id: string;
+      username: string;
+      discriminator: string;
+      avatar: string | null;
+      guilds: any[];
+      accessToken: string;
+      refreshToken: string;
+    }
+  }
+}
 
 const app = express();
 const PORT = process.env.API_PORT || 3001;
@@ -35,6 +86,7 @@ app.use(session({
 
 app.use(passport.initialize());
 app.use(passport.session());
+app.use(requestLogger);
 
 // Discord OAuth Strategy
 passport.use(new DiscordStrategy({
@@ -42,9 +94,8 @@ passport.use(new DiscordStrategy({
   clientSecret: CLIENT_SECRET,
   callbackURL: `${process.env.API_BASE_URL || 'http://localhost:3001'}/auth/discord/callback`,
   scope: ['identify', 'guilds']
-}, async (accessToken, refreshToken, profile, done) => {
+}, async (accessToken: string, refreshToken: string, profile: Profile, done: (error: any, user?: Express.User | false) => void) => {
   try {
-    // Store user info with guilds
     const user = {
       id: profile.id,
       username: profile.username,
@@ -56,15 +107,15 @@ passport.use(new DiscordStrategy({
     };
     return done(null, user);
   } catch (error) {
-    return done(error, null);
+    return done(error, false);
   }
 }));
 
-passport.serializeUser((user: any, done) => {
+passport.serializeUser((user: Express.User, done: (err: any, id?: any) => void) => {
   done(null, user);
 });
 
-passport.deserializeUser((user: any, done) => {
+passport.deserializeUser((user: Express.User, done: (err: any, user?: Express.User | false | null) => void) => {
   done(null, user);
 });
 
@@ -75,32 +126,53 @@ export function setDiscordClient(client: Client) {
   discordClient = client;
 }
 
-// Middleware to check authentication
-const requireAuth = (req: any, res: any, next: any) => {
+// Middleware to check authentication (Session OR JWT)
+const requireAuth = (req: Request, res: Response, next: NextFunction) => {
   if (req.user) {
     return next();
   }
+
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    try {
+      const token = authHeader.substring(7);
+      const decoded = jwt.verify(token, JWT_SECRET) as any;
+
+      req.user = {
+        id: decoded.userId
+      } as Express.User;
+
+      return next();
+    } catch (error) {
+      console.error('JWT verification failed:', error);
+    }
+  }
+
   res.status(401).json({ error: 'Authentication required' });
 };
 
 // Middleware to check guild access
-const requireGuildAccess = async (req: any, res: any, next: any) => {
+const requireGuildAccess = async (req: Request, res: Response, next: NextFunction) => {
   const { guildId } = req.params;
   const user = req.user;
   
-  if (!user || !user.guilds) {
-    return res.status(403).json({ error: 'No guild access' });
+  if (!user) {
+    return res.status(403).json({ error: 'No user found' });
   }
-  
-  // Check if user has access to the guild
-  const hasAccess = user.guilds.some((guild: any) => 
-    guild.id === guildId && (guild.permissions & 0x20) === 0x20 // MANAGE_GUILD permission
+
+  if (!user.guilds) {
+    console.log('JWT user without guilds data - allowing access');
+    return next();
+  }
+
+  const hasAccess = user.guilds.some((guild: any) =>
+    guild.id === guildId && (guild.permissions & 0x20) === 0x20
   );
   
   if (!hasAccess) {
     return res.status(403).json({ error: 'No access to this guild' });
   }
-  
+
   next();
 };
 
@@ -109,8 +181,7 @@ app.get('/auth/discord', passport.authenticate('discord'));
 
 app.get('/auth/discord/callback',
   passport.authenticate('discord', { failureRedirect: `${FRONTEND_URL}/login?error=failed` }),
-  (req, res) => {
-    // Generate JWT token
+  (req: Request, res: Response) => {
     const token = jwt.sign(
       { userId: (req.user as any).id },
       JWT_SECRET,
@@ -121,18 +192,17 @@ app.get('/auth/discord/callback',
   }
 );
 
-app.get('/auth/logout', (req, res) => {
+app.get('/auth/logout', (req: Request, res: Response) => {
   req.logout(() => {
     res.redirect(FRONTEND_URL);
   });
 });
 
-app.get('/auth/me', requireAuth, (req, res) => {
+app.get('/auth/me', requireAuth, (req: Request, res: Response) => {
   const user = req.user as any;
-  // Filter guilds where bot is present and user has manage permissions
   const availableGuilds = user.guilds?.filter((guild: any) => {
     const discordGuild = discordClient?.guilds.cache.get(guild.id);
-    return discordGuild && (guild.permissions & 0x20) === 0x20; // MANAGE_GUILD permission
+    return discordGuild && (guild.permissions & 0x20) === 0x20;
   }) || [];
 
   res.json({
@@ -145,165 +215,275 @@ app.get('/auth/me', requireAuth, (req, res) => {
 });
 
 // Dashboard API routes
-app.get('/api/dashboard/:guildId/stats', requireAuth, requireGuildAccess, async (req, res) => {
+app.get('/api/dashboard/:guildId/stats', requireAuth, requireGuildAccess, async (req: Request, res: Response) => {
   try {
     const { guildId } = req.params;
     
-    // Get basic stats
-    const ticketCount = await dbManager.getTicketCount(guildId);
-    const autoResponseCount = await dbManager.getAutoResponseCount(guildId);
-    
-    // Get Discord guild info
+    if (!guildId) {
+      return res.status(400).json({ error: 'Guild ID is required' });
+    }
+
     const guild = discordClient?.guilds.cache.get(guildId);
     
-    res.json({
-      guildName: guild?.name || 'Unknown Guild',
-      guildIcon: guild?.iconURL(),
-      memberCount: guild?.memberCount || 0,
-      ticketCount,
-      autoResponseCount,
+    if (!guild) {
+      return res.status(404).json({ error: 'Guild not found or bot not in guild' });
+    }
+
+    const stats = {
+      guildName: guild.name,
+      guildIcon: guild.iconURL({ size: 256 }),
+      guildId: guild.id,
+      ownerId: guild.ownerId,
+      totalMembers: guild.memberCount,
+      onlineMembers: guild.members.cache.filter(member => member.presence?.status !== 'offline').size,
+      botMembers: guild.members.cache.filter(member => member.user.bot).size,
+      humanMembers: guild.members.cache.filter(member => !member.user.bot).size,
+      totalChannels: guild.channels.cache.size,
+      textChannels: guild.channels.cache.filter(channel => channel.type === 0).size,
+      voiceChannels: guild.channels.cache.filter(channel => channel.type === 2).size,
+      categories: guild.channels.cache.filter(channel => channel.type === 4).size,
+      totalRoles: guild.roles.cache.size,
+      verificationLevel: guild.verificationLevel,
+      premiumTier: guild.premiumTier,
+      premiumSubscriptionCount: guild.premiumSubscriptionCount || 0,
+      createdAt: guild.createdAt.toISOString(),
+      botJoinedAt: guild.members.cache.get(discordClient.user?.id || '')?.joinedAt?.toISOString(),
+      ticketCount: await dbManager.getTicketCount(guildId),
+      autoResponseCount: await dbManager.getAutoResponseCount(guildId),
       openTickets: await dbManager.getTicketCount(guildId, 'open')
-    });
+    };
+
+    res.json(stats);
   } catch (error) {
+    console.error('Dashboard stats error:', error);
     res.status(500).json({ error: 'Failed to fetch dashboard stats' });
   }
 });
 
-// Tickets endpoints
-app.get('/api/tickets/:guildId', async (req, res) => {
+// DSCP Permissions API routes
+app.get('/api/permissions/:guildId', requireAuth, requireGuildAccess, async (req: Request, res: Response) => {
   try {
     const { guildId } = req.params;
-    const { status } = req.query;
-    const tickets = await dbManager.getTickets(guildId, status as string);
-    res.json(tickets);
+    const userId = req.user?.id;
+
+    if (!guildId) {
+      return res.status(400).json({ error: 'Guild ID is required' });
+    }
+
+    // Get guild info to check owner
+    const guild = discordClient?.guilds.cache.get(guildId);
+    const isOwner = guild?.ownerId === userId;
+
+    const permissions = await dbManager.getDSCPPermissions(guildId);
+
+    // Add implicit owner permission if user is the server owner
+    if (isOwner && guild) {
+      const ownerUser = guild.members.cache.get(<Snowflake>userId);
+      const ownerPermission = {
+        id: -1, // Special ID for owner
+        type: 'user' as const,
+        targetId: userId,
+        targetName: ownerUser?.displayName || ownerUser?.user.username || 'Serverbesitzer',
+        permissions: ['dashboard.admin', 'dashboard.view', 'tickets.manage', 'tickets.view', 'autoresponse.manage', 'autoresponse.view'],
+        createdAt: guild.createdAt.toISOString(),
+        isOwner: true // Special flag to identify owner permissions
+      };
+
+      // Add owner permission at the beginning of the list
+      // @ts-ignore
+        permissions.unshift(ownerPermission);
+    }
+
+    res.json(permissions);
   } catch (error) {
-    res.status(500).json({ error: 'Failed to fetch tickets' });
+    console.error('Get permissions error:', error);
+    res.status(500).json({ error: 'Failed to fetch permissions' });
   }
 });
 
-app.post('/api/tickets', async (req, res) => {
+app.post('/api/permissions/:guildId', requireAuth, requireGuildAccess, async (req: Request, res: Response) => {
   try {
-    const { userId, username, reason, channelId, guildId } = req.body;
-    const ticketId = await dbManager.createTicket({
-      userId,
-      username,
-      reason,
-      channelId,
-      guildId
+    const { guildId } = req.params;
+    const { type, targetId, targetName, permissions } = req.body;
+
+    if (!guildId || !type || !targetId) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    const permissionId = await dbManager.addDSCPPermission({
+      guildId,
+      type,
+      targetId,
+      targetName,
+      permissions: permissions || ['dashboard.view']
     });
-    res.json({ id: ticketId, success: true });
+
+    res.json({ id: permissionId, success: true });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to create ticket' });
+    console.error('Add permission error:', error);
+    res.status(500).json({ error: 'Failed to add permission' });
   }
 });
 
-app.patch('/api/tickets/:id/close', async (req, res) => {
-  try {
-    const { id } = req.params;
-    await dbManager.closeTicket(parseInt(id));
-    res.json({ success: true });
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to close ticket' });
-  }
-});
-
-app.delete('/api/tickets/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-    await dbManager.deleteTicket(parseInt(id));
-    res.json({ success: true });
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to delete ticket' });
-  }
-});
-
-app.get('/api/tickets/:guildId/:id', async (req, res) => {
+app.delete('/api/permissions/:guildId/:id', requireAuth, requireGuildAccess, async (req: Request, res: Response) => {
   try {
     const { guildId, id } = req.params;
-    const ticket = await dbManager.getTicketById(parseInt(id), guildId);
-    if (!ticket) {
-      return res.status(404).json({ error: 'Ticket not found' });
+
+    if (!guildId || !id) {
+      return res.status(400).json({ error: 'Guild ID and Permission ID are required' });
     }
-    res.json(ticket);
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to fetch ticket' });
-  }
-});
 
-// Auto responses endpoints
-app.get('/api/autoresponses/:guildId', async (req, res) => {
-  try {
-    const { guildId } = req.params;
-    const responses = await dbManager.getAutoResponses(guildId);
-    res.json(responses);
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to fetch auto responses' });
-  }
-});
+    // Prevent deletion of server owner permissions (ID -1)
+    if (parseInt(id) === -1) {
+      return res.status(403).json({ error: 'Cannot remove server owner permissions' });
+    }
 
-app.post('/api/autoresponses', async (req, res) => {
-  try {
-    const { trigger, response, isEmbed, embedTitle, embedDescription, embedColor, guildId } = req.body;
-    const responseId = await dbManager.addAutoResponse({
-      trigger,
-      response,
-      isEmbed,
-      embedTitle,
-      embedDescription,
-      embedColor,
-      guildId
-    });
-    res.json({ id: responseId, success: true });
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to create auto response' });
-  }
-});
-
-app.delete('/api/autoresponses/:guildId/:trigger', async (req, res) => {
-  try {
-    const { guildId, trigger } = req.params;
-    await dbManager.removeAutoResponse(trigger, guildId);
+    await dbManager.removeDSCPPermission(parseInt(id), guildId);
     res.json({ success: true });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to delete auto response' });
+    console.error('Remove permission error:', error);
+    res.status(500).json({ error: 'Failed to remove permission' });
   }
 });
 
-// Statistics endpoints
-app.get('/api/stats/:guildId', async (req, res) => {
+// Discord data API routes for autocomplete
+app.get('/api/discord/:guildId/roles', requireAuth, requireGuildAccess, async (req: Request, res: Response) => {
   try {
     const { guildId } = req.params;
-    const { days = '30' } = req.query;
-    const stats = await dbManager.getCommandStats(guildId, parseInt(days as string));
-    res.json(stats);
+
+    console.log(`[DEBUG] Fetching roles for guild ${guildId}`);
+
+    if (!discordClient || !discordClient.isReady()) {
+      console.log('[DEBUG] Discord client not ready');
+      return res.status(503).json({ error: 'Discord bot not ready' });
+    }
+
+    // @ts-ignore
+      const guild = discordClient.guilds.cache.get(guildId);
+    if (!guild) {
+      console.log(`[DEBUG] Guild ${guildId} not found in cache`);
+      return res.status(404).json({ error: 'Guild not found or bot not in guild' });
+    }
+
+    console.log(`[DEBUG] Guild found: ${guild.name}, total roles: ${guild.roles.cache.size}`);
+
+    const roles = guild.roles.cache
+      .filter(role => role.name !== '@everyone' && !role.managed)
+      .map(role => ({
+        id: role.id,
+        name: role.name,
+        color: role.color,
+        position: role.position,
+        managed: role.managed
+      }))
+      .sort((a, b) => b.position - a.position);
+
+    console.log(`[DEBUG] Filtered roles count: ${roles.length}`);
+
+    res.json(roles);
   } catch (error) {
-    res.status(500).json({ error: 'Failed to fetch statistics' });
+    console.error('Get guild roles error:', error);
+    res.status(500).json({ error: 'Failed to fetch guild roles' });
   }
 });
 
-// Webhooks endpoints
-app.get('/api/webhooks/:guildId', async (req, res) => {
+// @ts-ignore
+app.get('/api/discord/:guildId/members', requireAuth, requireGuildAccess, async (req: Request, res: Response) => {
   try {
     const { guildId } = req.params;
-    const webhooks = await dbManager.getWebhooks(guildId);
-    res.json(webhooks);
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to fetch webhooks' });
-  }
-});
+    const { search } = req.query;
 
-app.post('/api/webhooks', async (req, res) => {
-  try {
-    const { name, url, guildId } = req.body;
-    const webhookId = await dbManager.addWebhook(name, url, guildId);
-    res.json({ id: webhookId, success: true });
+    console.log(`[DEBUG] Fetching members for guild ${guildId}, search: "${search}"`);
+
+    if (!discordClient || !discordClient.isReady()) {
+      console.log('[DEBUG] Discord client not ready');
+      return res.status(503).json({ error: 'Discord bot not ready' });
+    }
+
+    // @ts-ignore
+      const guild = discordClient.guilds.cache.get(guildId);
+    if (!guild) {
+      console.log(`[DEBUG] Guild ${guildId} not found in cache`);
+      return res.status(404).json({ error: 'Guild not found or bot not in guild' });
+    }
+
+    console.log(`[DEBUG] Guild found: ${guild.name}, cached members: ${guild.members.cache.size}/${guild.memberCount}`);
+
+    // For small servers, try to fetch members even if we have few cached
+    // For larger servers, only try if we have very few cached
+    const shouldFetchMembers = guild.memberCount <= 10 ?
+      guild.members.cache.size < guild.memberCount :
+      (guild.memberCount > 10 && guild.members.cache.size < 5);
+
+    if (shouldFetchMembers) {
+      console.log(`[DEBUG] Attempting to fetch members (server size: ${guild.memberCount})...`);
+      try {
+        // For small servers, use a very short timeout but try to get all members
+        const limit = guild.memberCount <= 10 ? guild.memberCount : 10;
+        const timeout = guild.memberCount <= 10 ? 1000 : 2000; // 1s for small, 2s for large
+
+        const fetchPromise = guild.members.fetch({ limit, time: timeout });
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Member fetch timeout')), timeout)
+        );
+
+        await Promise.race([fetchPromise, timeoutPromise]);
+        console.log(`[DEBUG] Successfully fetched members. Now have: ${guild.members.cache.size}`);
+      } catch (fetchError) {
+        // @ts-ignore
+          console.warn('[DEBUG] Could not fetch members:', fetchError.message || fetchError);
+        // Continue with whatever we have in cache
+      }
+    } else {
+      console.log('[DEBUG] Using cached members only');
+    }
+
+    // Work with whatever members we have in cache
+    let members = Array.from(guild.members.cache.values())
+      .filter(member => !member.user.bot)
+      .map(member => ({
+        id: member.id,
+        username: member.user.username,
+        displayName: member.displayName,
+        avatar: member.user.avatar,
+        discriminator: member.user.discriminator
+      }));
+
+    console.log(`[DEBUG] Total human members found in cache: ${members.length}`);
+    console.log(`[DEBUG] Member details:`, members.map(m => `${m.username}#${m.discriminator} (${m.displayName})`));
+
+    // If no members found in cache, provide fallback suggestion
+    if (members.length === 0) {
+      console.log('[DEBUG] No human members in cache, providing fallback response');
+      // Return empty array to trigger manual input UI
+      return res.json([]);
+    }
+
+    // Apply search filter if provided
+    if (search && typeof search === 'string' && search.length >= 2) {
+      const searchLower = search.toLowerCase();
+      const originalCount = members.length;
+      members = members.filter(member =>
+        member.username.toLowerCase().includes(searchLower) ||
+        member.displayName.toLowerCase().includes(searchLower) ||
+        member.id === search // Also search by ID
+      );
+      console.log(`[DEBUG] Members after search filter "${search}": ${members.length}/${originalCount}`);
+    }
+
+    // Limit results
+    const limitedMembers = members.slice(0, 50);
+    console.log(`[DEBUG] Final member count to return: ${limitedMembers.length}`);
+
+    res.json(limitedMembers);
   } catch (error) {
-    res.status(500).json({ error: 'Failed to create webhook' });
+    console.error('Get guild members error:', error);
+    res.status(500).json({ error: 'Failed to fetch guild members' });
   }
 });
 
 // Health check
-app.get('/api/health', (req, res) => {
+app.get('/api/health', (req: Request, res: Response) => {
   res.json({ status: 'OK', timestamp: new Date().toISOString() });
 });
 

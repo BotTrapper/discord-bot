@@ -95,6 +95,21 @@ export class DatabaseManager {
         UNIQUE(user_id, guild_id)
       )
     `);
+
+    // DSCP Permissions table for fine-grained access control
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS dscp_permissions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        guild_id TEXT NOT NULL,
+        type TEXT NOT NULL, -- 'user' or 'role'
+        target_id TEXT NOT NULL, -- user_id or role_id
+        target_name TEXT NOT NULL, -- username or role name for display
+        permissions TEXT NOT NULL, -- JSON array of permissions
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(guild_id, type, target_id)
+      )
+    `);
   }
 
   // Ticket methods
@@ -306,6 +321,94 @@ export class DatabaseManager {
         function(err) {
           if (err) reject(err);
           else resolve(this.lastID);
+        }
+      );
+    });
+  }
+
+  // DSCP Permissions methods
+  async getDSCPPermissions(guildId: string) {
+    return new Promise((resolve, reject) => {
+      this.db.all(
+        `SELECT * FROM dscp_permissions WHERE guild_id = ? ORDER BY created_at DESC`,
+        [guildId],
+        (err, rows: any[]) => {
+          if (err) reject(err);
+          else {
+            // Parse JSON permissions for each row
+            const parsedRows = rows.map(row => ({
+              ...row,
+              permissions: JSON.parse(row.permissions)
+            }));
+            resolve(parsedRows);
+          }
+        }
+      );
+    });
+  }
+
+  async addDSCPPermission(permissionData: {
+    guildId: string;
+    type: string;
+    targetId: string;
+    targetName: string;
+    permissions: string[];
+  }) {
+    return new Promise((resolve, reject) => {
+      this.db.run(
+        `INSERT OR REPLACE INTO dscp_permissions (guild_id, type, target_id, target_name, permissions, updated_at) 
+         VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+        [
+          permissionData.guildId,
+          permissionData.type,
+          permissionData.targetId,
+          permissionData.targetName,
+          JSON.stringify(permissionData.permissions)
+        ],
+        function(err) {
+          if (err) reject(err);
+          else resolve(this.lastID);
+        }
+      );
+    });
+  }
+
+  async removeDSCPPermission(id: number, guildId: string) {
+    return new Promise((resolve, reject) => {
+      this.db.run(
+        `DELETE FROM dscp_permissions WHERE id = ? AND guild_id = ?`,
+        [id, guildId],
+        function(err) {
+          if (err) reject(err);
+          else resolve(this.changes);
+        }
+      );
+    });
+  }
+
+  async checkDSCPPermission(userId: string, guildId: string, permission: string) {
+    return new Promise((resolve, reject) => {
+      this.db.get(
+        `SELECT permissions FROM dscp_permissions 
+         WHERE guild_id = ? AND type = 'user' AND target_id = ?`,
+        [guildId, userId],
+        (err, row: any) => {
+          if (err) {
+            reject(err);
+            return;
+          }
+
+          if (!row) {
+            resolve(false);
+            return;
+          }
+
+          try {
+            const permissions = JSON.parse(row.permissions);
+            resolve(permissions.includes(permission) || permissions.includes('*'));
+          } catch (parseErr) {
+            reject(parseErr);
+          }
         }
       );
     });

@@ -71,7 +71,7 @@ async function initializeGuildData() {
     await initializeDatabase();
     
     const guilds = client.guilds.cache;
-    for (const [guildId, guild] of guilds) {
+    for (const [guildId] of guilds) {
       // Initialize default data for guild
       await initializeGuildDefaults(guildId);
       
