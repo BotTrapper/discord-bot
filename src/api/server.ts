@@ -85,7 +85,10 @@ const PgSession = connectPgSimple(session);
 
 // Middleware
 app.use(cors({
-  origin: FRONTEND_URL,
+  origin: [
+    FRONTEND_URL,
+    'https://bottrapper.github.io'
+  ],
   credentials: true
 }));
 app.use(express.json());
