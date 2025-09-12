@@ -1,6 +1,6 @@
 import { dbManager } from '../database/database.js';
 
-export type FeatureName = 'tickets' | 'autoresponses' | 'statistics' | 'webhooks';
+export type FeatureName = 'tickets' | 'autoresponses' | 'statistics';
 
 export class FeatureManager {
   private static instance: FeatureManager;
@@ -85,7 +85,7 @@ export class FeatureManager {
     } catch (error) {
       console.error(`Error getting enabled features for guild ${guildId}:`, error);
       // Return default features on error
-      return ['tickets', 'autoresponses', 'statistics', 'webhooks'];
+      return ['tickets', 'autoresponses', 'statistics'];
     }
   }
 

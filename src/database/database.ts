@@ -3,6 +3,11 @@ import { Pool, PoolClient } from 'pg';
 export class DatabaseManager {
   private pool: Pool;
 
+  // Getter for the connection pool (needed for session store)
+  get connectionPool(): Pool {
+    return this.pool;
+  }
+
   constructor() {
     const connectionString = process.env.DATABASE_URL ||
       `postgresql://${process.env.DB_USER || 'postgres'}:${process.env.DB_PASSWORD || 'password'}@${process.env.DB_HOST || 'localhost'}:${process.env.DB_PORT || 5432}/${process.env.DB_NAME || 'bottrapper'}`;
@@ -12,26 +17,55 @@ export class DatabaseManager {
     this.pool = new Pool({
       connectionString,
       ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
-      max: 20, // Maximum number of clients in the pool
+      max: 10, // Maximum number of clients in the pool
       idleTimeoutMillis: 30000, // How long a client is allowed to remain idle
-      connectionTimeoutMillis: 2000, // How long to wait when connecting a client
+      connectionTimeoutMillis: 10000, // How long to wait when connecting a client (10 seconds)
+      statement_timeout: 30000, // How long to wait for a query to complete (30 seconds)
+      query_timeout: 30000, // Query timeout
+      application_name: 'BotTrapper-Discord-Bot'
     });
 
-    this.pool.on('connect', () => {
+    this.pool.on('connect', (client) => {
       console.log('✅ PostgreSQL connected successfully!');
     });
 
     this.pool.on('error', (err) => {
-      console.error('❌ PostgreSQL connection error:', err);
+      console.error('❌ PostgreSQL pool error:', err);
+      if (err.message.includes('Connection terminated')) {
+        console.log('🔄 Attempting to reconnect...');
+      }
     });
 
+    this.pool.on('acquire', () => {
+      console.log('🔗 PostgreSQL client acquired from pool');
+    });
+
+    // Test the connection immediately
+    this.testConnection();
+    
     this.initializeTables();
+  }
+  
+  private async testConnection() {
+    try {
+      const client = await this.pool.connect();
+      await client.query('SELECT 1');
+      client.release();
+      console.log('✅ Initial PostgreSQL connection test successful');
+    } catch (error) {
+      console.error('❌ Initial PostgreSQL connection test failed:', error);
+      throw error;
+    }
   }
 
   private async initializeTables() {
-    const client = await this.pool.connect();
-
+    console.log('🔧 Initializing database...');
+    let client;
+    
     try {
+      client = await this.pool.connect();
+      console.log('✅ Database connection acquired for initialization');
+
       // Enable UUID extension
       await client.query('CREATE EXTENSION IF NOT EXISTS "uuid-ossp"');
 
@@ -137,10 +171,77 @@ export class DatabaseManager {
         CREATE TABLE IF NOT EXISTS guild_settings (
           id SERIAL PRIMARY KEY,
           guild_id TEXT NOT NULL UNIQUE,
-          enabled_features TEXT DEFAULT '["tickets","autoresponses","statistics","webhooks"]', -- JSON array
+          enabled_features TEXT DEFAULT '["tickets","autoresponses","statistics"]', -- JSON array
           settings TEXT DEFAULT '{}', -- JSON object for additional settings
           created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
           updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+
+      // User JWT tokens table for persistent authentication
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS user_tokens (
+          id SERIAL PRIMARY KEY,
+          user_id TEXT NOT NULL UNIQUE,
+          jwt_token TEXT NOT NULL,
+          access_token TEXT,
+          refresh_token TEXT,
+          expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+
+      // Add access_token column if it doesn't exist (migration)
+      await client.query(`
+        DO $$
+        BEGIN
+          IF NOT EXISTS (
+            SELECT 1 FROM information_schema.columns 
+            WHERE table_name = 'user_tokens' AND column_name = 'access_token'
+          ) THEN
+            ALTER TABLE user_tokens ADD COLUMN access_token TEXT;
+          END IF;
+        END $$;
+      `);
+
+      // Global admin users table
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS global_admins (
+          id SERIAL PRIMARY KEY,
+          user_id TEXT NOT NULL UNIQUE,
+          username TEXT NOT NULL,
+          level INTEGER DEFAULT 1,
+          granted_by TEXT,
+          granted_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+          is_active BOOLEAN DEFAULT true
+        )
+      `);
+
+      // Global settings table
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS global_settings (
+          id SERIAL PRIMARY KEY,
+          setting_key TEXT NOT NULL UNIQUE,
+          setting_value TEXT,
+          setting_type TEXT DEFAULT 'string',
+          description TEXT,
+          updated_by TEXT,
+          updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+
+      // Admin activity log
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS admin_activity_log (
+          id SERIAL PRIMARY KEY,
+          admin_user_id TEXT NOT NULL,
+          action TEXT NOT NULL,
+          target_type TEXT,
+          target_id TEXT,
+          details TEXT,
+          guild_id TEXT,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
         )
       `);
 
@@ -153,13 +254,19 @@ export class DatabaseManager {
       await client.query('CREATE INDEX IF NOT EXISTS idx_bot_stats_executed_at ON bot_stats(executed_at)');
       await client.query('CREATE INDEX IF NOT EXISTS idx_dscp_permissions_guild_id ON dscp_permissions(guild_id)');
       await client.query('CREATE INDEX IF NOT EXISTS idx_webhooks_guild_id ON webhooks(guild_id)');
+      await client.query('CREATE INDEX IF NOT EXISTS idx_user_tokens_user_id ON user_tokens(user_id)');
+      await client.query('CREATE INDEX IF NOT EXISTS idx_user_tokens_expires_at ON user_tokens(expires_at)');
 
-      console.log('✅ PostgreSQL tables initialized successfully!');
+      console.log('✅ Database tables initialized');
+      console.log('✅ Database initialization complete');
     } catch (error) {
       console.error('❌ Error initializing PostgreSQL tables:', error);
       throw error;
     } finally {
-      client.release();
+      if (client) {
+        client.release();
+        console.log('🔗 Database connection released');
+      }
     }
   }
 
@@ -548,7 +655,7 @@ export class DatabaseManager {
       }
 
       // If no settings exist, create default settings and save to database
-      const defaultFeatures = ['tickets', 'autoresponses', 'statistics', 'webhooks'];
+      const defaultFeatures = ['tickets', 'autoresponses', 'statistics'];
       const defaultSettings = {};
 
       // Insert the default settings directly within this connection
@@ -582,6 +689,243 @@ export class DatabaseManager {
         [guildId, JSON.stringify(enabledFeatures), JSON.stringify(settings)]
       );
       return result.rows[0].id;
+    } finally {
+      client.release();
+    }
+  }
+
+  // JWT Token methods
+  async storeUserToken(userId: string, jwtToken: string, accessToken: string, refreshToken: string, expiresAt: Date) {
+    const client = await this.pool.connect();
+    try {
+      const result = await client.query(
+        `INSERT INTO user_tokens (user_id, jwt_token, access_token, refresh_token, expires_at) 
+         VALUES ($1, $2, $3, $4, $5) 
+         ON CONFLICT (user_id) 
+         DO UPDATE SET jwt_token = $2, access_token = $3, refresh_token = $4, expires_at = $5, updated_at = CURRENT_TIMESTAMP
+         RETURNING id`,
+        [userId, jwtToken, accessToken, refreshToken, expiresAt]
+      );
+      return result.rows[0].id;
+    } finally {
+      client.release();
+    }
+  }
+
+  async updateUserTokens(userId: string, accessToken: string, refreshToken: string, expiresAt: Date) {
+    const client = await this.pool.connect();
+    try {
+      const result = await client.query(
+        `UPDATE user_tokens 
+         SET access_token = $2, refresh_token = $3, expires_at = $4, updated_at = CURRENT_TIMESTAMP
+         WHERE user_id = $1
+         RETURNING id`,
+        [userId, accessToken, refreshToken, expiresAt]
+      );
+      return result.rows[0]?.id || null;
+    } finally {
+      client.release();
+    }
+  }
+
+  async getUserToken(userId: string) {
+    const client = await this.pool.connect();
+    try {
+      const result = await client.query(
+        `SELECT jwt_token, access_token, refresh_token, expires_at FROM user_tokens 
+         WHERE user_id = $1 AND expires_at > CURRENT_TIMESTAMP`,
+        [userId]
+      );
+      return result.rows[0] || null;
+    } finally {
+      client.release();
+    }
+  }
+
+  async removeUserToken(userId: string) {
+    const client = await this.pool.connect();
+    try {
+      const result = await client.query(
+        `DELETE FROM user_tokens WHERE user_id = $1`,
+        [userId]
+      );
+      return result.rowCount;
+    } finally {
+      client.release();
+    }
+  }
+
+  async cleanExpiredTokens() {
+    const client = await this.pool.connect();
+    try {
+      const result = await client.query(
+        `DELETE FROM user_tokens WHERE expires_at <= CURRENT_TIMESTAMP`
+      );
+      console.log(`🧹 Cleaned ${result.rowCount} expired tokens`);
+      return result.rowCount;
+    } finally {
+      client.release();
+    }
+  }
+
+  // Global Admin methods
+  async addGlobalAdmin(userId: string, username: string, level: number = 1, grantedBy: string) {
+    const client = await this.pool.connect();
+    try {
+      const result = await client.query(
+        `INSERT INTO global_admins (user_id, username, level, granted_by) 
+         VALUES ($1, $2, $3, $4) 
+         ON CONFLICT (user_id) 
+         DO UPDATE SET username = $2, level = $3, granted_by = $4, granted_at = CURRENT_TIMESTAMP, is_active = true
+         RETURNING id`,
+        [userId, username, level, grantedBy]
+      );
+      return result.rows[0].id;
+    } finally {
+      client.release();
+    }
+  }
+
+  async removeGlobalAdmin(userId: string) {
+    const client = await this.pool.connect();
+    try {
+      const result = await client.query(
+        `UPDATE global_admins SET is_active = false WHERE user_id = $1`,
+        [userId]
+      );
+      return result.rowCount || 0;
+    } finally {
+      client.release();
+    }
+  }
+
+  async isGlobalAdmin(userId: string): Promise<{ isAdmin: boolean; level: number }> {
+    const client = await this.pool.connect();
+    try {
+      const result = await client.query(
+        `SELECT level FROM global_admins WHERE user_id = $1 AND is_active = true`,
+        [userId]
+      );
+      if (result.rows.length > 0) {
+        return { isAdmin: true, level: result.rows[0].level };
+      }
+      return { isAdmin: false, level: 0 };
+    } finally {
+      client.release();
+    }
+  }
+
+  async getAllGlobalAdmins() {
+    const client = await this.pool.connect();
+    try {
+      const result = await client.query(
+        `SELECT * FROM global_admins WHERE is_active = true ORDER BY level DESC, granted_at DESC`
+      );
+      return result.rows;
+    } finally {
+      client.release();
+    }
+  }
+
+  // Global Settings methods
+  async setGlobalSetting(key: string, value: string, type: string = 'string', description: string = '', updatedBy: string) {
+    const client = await this.pool.connect();
+    try {
+      const result = await client.query(
+        `INSERT INTO global_settings (setting_key, setting_value, setting_type, description, updated_by) 
+         VALUES ($1, $2, $3, $4, $5) 
+         ON CONFLICT (setting_key) 
+         DO UPDATE SET setting_value = $2, setting_type = $3, description = $4, updated_by = $5, updated_at = CURRENT_TIMESTAMP
+         RETURNING id`,
+        [key, value, type, description, updatedBy]
+      );
+      return result.rows[0].id;
+    } finally {
+      client.release();
+    }
+  }
+
+  async getGlobalSetting(key: string) {
+    const client = await this.pool.connect();
+    try {
+      const result = await client.query(
+        `SELECT * FROM global_settings WHERE setting_key = $1`,
+        [key]
+      );
+      return result.rows[0] || null;
+    } finally {
+      client.release();
+    }
+  }
+
+  async getAllGlobalSettings() {
+    const client = await this.pool.connect();
+    try {
+      const result = await client.query(
+        `SELECT * FROM global_settings ORDER BY setting_key ASC`
+      );
+      return result.rows;
+    } finally {
+      client.release();
+    }
+  }
+
+  // Admin Activity Log
+  async logAdminActivity(adminUserId: string, action: string, targetType?: string, targetId?: string, details?: string, guildId?: string) {
+    const client = await this.pool.connect();
+    try {
+      const result = await client.query(
+        `INSERT INTO admin_activity_log (admin_user_id, action, target_type, target_id, details, guild_id) 
+         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+        [adminUserId, action, targetType || null, targetId || null, details || null, guildId || null]
+      );
+      return result.rows[0].id;
+    } finally {
+      client.release();
+    }
+  }
+
+  async getAdminActivityLog(limit: number = 50) {
+    const client = await this.pool.connect();
+    try {
+      const result = await client.query(
+        `SELECT al.*, ga.username as admin_username 
+         FROM admin_activity_log al 
+         LEFT JOIN global_admins ga ON al.admin_user_id = ga.user_id 
+         ORDER BY al.created_at DESC 
+         LIMIT $1`,
+        [limit]
+      );
+      return result.rows;
+    } finally {
+      client.release();
+    }
+  }
+
+  // Admin Guilds method - Get all guilds that have any bot activity
+  async getAllGuilds(): Promise<string[]> {
+    const client = await this.pool.connect();
+    try {
+      // Get all unique guild_ids from various tables (avoiding autoresponses table that doesn't exist)
+      const result = await client.query(`
+        SELECT DISTINCT guild_id 
+        FROM (
+          SELECT guild_id FROM guild_settings 
+          UNION 
+          SELECT guild_id FROM guild_permissions
+          UNION 
+          SELECT guild_id FROM tickets
+          UNION 
+          SELECT guild_id FROM dscp_permissions
+        ) AS all_guilds 
+        WHERE guild_id IS NOT NULL
+        ORDER BY guild_id
+      `);
+      
+      return result.rows.map(row => row.guild_id);
+    } catch (error) {
+      console.error('Get all guilds error:', error);
+      return [];
     } finally {
       client.release();
     }

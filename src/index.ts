@@ -1,16 +1,16 @@
 import { Client, GatewayIntentBits, REST, Routes, Collection, type Interaction } from 'discord.js';
 import { AutoResponseFeature } from './features/autoResponse.js';
-import { WebhookNotification } from './features/webhookNotification.js';
 import { PermissionManager } from './features/permissionManager.js';
-import { featureManager } from './features/featureManager.js';
+import { featureManager, type FeatureName } from './features/featureManager.js';
 import { dbManager } from './database/database.js';
 import { initializeDatabase, initializeGuildDefaults } from './database/migrations.js';
 import { startApiServer, setDiscordClient, setRegisterGuildCommandsFunction } from './api/server.js';
+import { versionManager } from './utils/version.js';
 import * as ticketCommand from './commands/ticket.js';
 import * as embedCommand from './commands/embed.js';
 import * as autoresponseCommand from './commands/autoresponse.js';
-import * as webhookCommand from './commands/webhook.js';
 import * as statsCommand from './commands/stats.js';
+import * as changelogCommand from './commands/changelog.js';
 import 'dotenv/config';
 
 const client = new Client({ 
@@ -27,16 +27,16 @@ const commands = new Collection();
 commands.set(ticketCommand.data.name, ticketCommand);
 commands.set(embedCommand.data.name, embedCommand);
 commands.set(autoresponseCommand.data.name, autoresponseCommand);
-commands.set(webhookCommand.data.name, webhookCommand);
 commands.set(statsCommand.data.name, statsCommand);
+commands.set(changelogCommand.data.name, changelogCommand);
 
 // Map commands to their required features
 const COMMAND_FEATURE_MAP: Record<string, string> = {
   'ticket': 'tickets',
   'autoresponse': 'autoresponses',
   'stats': 'statistics',
-  'webhook': 'webhooks',
   // 'embed' is always available (no feature requirement)
+  // 'changelog' is always available (no feature requirement)
 };
 
 const TOKEN = process.env.DISCORD_TOKEN || '';
@@ -47,8 +47,8 @@ const commandsData = [
   ticketCommand.data.toJSON(),
   embedCommand.data.toJSON(),
   autoresponseCommand.data.toJSON(),
-  webhookCommand.data.toJSON(),
   statsCommand.data.toJSON(),
+  changelogCommand.data.toJSON(),
 ];
 
 const rest = new REST({ version: '10' }).setToken(TOKEN);
@@ -92,7 +92,7 @@ async function registerGuildCommands(guildId: string) {
       if (!requiredFeature) return true;
 
       // Only include if feature is enabled
-      return enabledFeatures.includes(requiredFeature);
+      return enabledFeatures.includes(requiredFeature as FeatureName);
     });
 
     console.log(`Registering ${availableCommands.length}/${commandsData.length} commands for guild ${guildId}`);
@@ -120,9 +120,6 @@ async function initializeGuildData() {
     for (const [guildId] of guilds) {
       // Initialize default data for guild
       await initializeGuildDefaults(guildId);
-      
-      // Load webhooks from database into memory cache
-      await WebhookNotification.loadWebhooks(guildId);
     }
     console.log('✅ Guild data initialized from database');
   } catch (error) {
@@ -171,7 +168,7 @@ async function generateChannelTranscript(channel: any): Promise<string> {
       // Fetch guild members for ID resolution
       if (channel.guild) {
         const members = await channel.guild.members.fetch();
-        members.forEach(member => {
+        members.forEach((member: any) => {
           memberCache.set(member.id, {
             username: member.user.username,
             displayName: member.displayName,
@@ -315,6 +312,11 @@ async function generateChannelTranscript(channel: any): Promise<string> {
 // Starte den API Server und verbinde den Discord Client
 async function main() {
   try {
+    // Log version information
+    const versionInfo = versionManager.getVersionInfo();
+    console.log(`🚀 Starting ${versionInfo.name} v${versionInfo.version}`);
+    console.log(`📅 Started at: ${versionInfo.startTime.toISOString()}`);
+    
     await initializeDatabase();
 
     client.once('ready', async () => {
@@ -341,9 +343,6 @@ async function main() {
 
       // Initialize default data for new guild
       await initializeGuildDefaults(guild.id);
-
-      // Load webhooks from database
-      await WebhookNotification.loadWebhooks(guild.id);
 
       console.log(`✅ Guild ${guild.name} initialized`);
     });
@@ -434,17 +433,8 @@ async function main() {
               await dbManager.closeTicket(ticket.id);
               console.log(`✅ Ticket ${ticket.id} closed successfully`);
 
-              // Send webhook notification
-              try {
-                await WebhookNotification.sendTicketNotification('tickets', {
-                  user: interaction.user.toString(),
-                  reason: ticket.reason,
-                  channelName: channel.name,
-                  action: 'closed'
-                });
-              } catch (webhookError) {
-                console.log('Webhook notification failed:', webhookError);
-              }
+              // Since Discord bot can write directly to channels, we don't need external webhooks
+              console.log(`🎫 Ticket ${ticket.id} was closed by ${interaction.user.username}`);
             } else {
               console.log(`⚠️ No open ticket found for channel ${channel.id}`);
             }

@@ -96,19 +96,9 @@ async function createTicket(interaction: any) {
         }
       })(),
       
-      // Send webhook notification
+      // Log ticket creation (Discord bot can write directly to channels)
       (async () => {
-        try {
-          const { WebhookNotification } = await import('../features/webhookNotification.js');
-          await WebhookNotification.sendTicketNotification('tickets', {
-            user: user.toString(),
-            reason,
-            channelName: ticketChannel.name,
-            action: 'created'
-          });
-        } catch (webhookError) {
-          console.log('Webhook notification failed:', webhookError);
-        }
+        console.log(`🎫 Ticket created: ${ticketChannel.name} for ${user.username} - ${reason}`);
       })()
     ]);
 
@@ -279,19 +269,9 @@ export async function createCategoryTicket(interaction: any, category: string) {
         }
       })(),
       
-      // Send webhook notification
+      // Log ticket creation (Discord bot can write directly to channels)
       (async () => {
-        try {
-          const { WebhookNotification } = await import('../features/webhookNotification.js');
-          await WebhookNotification.sendTicketNotification('tickets', {
-            user: user.toString(),
-            reason: categoryInfo.name,
-            channelName: ticketChannel.name,
-            action: 'created'
-          });
-        } catch (webhookError) {
-          console.log('Webhook notification failed:', webhookError);
-        }
+        console.log(`🎫 Ticket created: ${ticketChannel.name} for ${user.username} - ${categoryInfo.name}`);
       })()
     ]);
 
