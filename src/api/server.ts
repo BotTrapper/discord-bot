@@ -9,6 +9,29 @@ import { dbManager } from '../database/database.js';
 import { featureManager, type FeatureName } from '../features/featureManager.js';
 import type {Client, Snowflake} from 'discord.js';
 
+// Type declarations for passport modules without types
+declare module 'passport' {
+  interface AuthenticateOptions {
+    failureRedirect?: string;
+  }
+}
+
+declare module 'express-session' {
+  interface SessionData {
+    passport?: any;
+  }
+}
+
+declare module 'passport-discord' {
+  interface Profile {
+    id: string;
+    username: string;
+    discriminator: string;
+    avatar: string | null;
+    guilds?: any[];
+  }
+}
+
 // Request logging middleware
 const requestLogger = (req: Request, res: Response, next: NextFunction) => {
   const startTime = Date.now();
@@ -201,7 +224,11 @@ app.get('/auth/discord/callback',
 );
 
 app.get('/auth/logout', (req: Request, res: Response) => {
-  req.logout(() => {
+  req.logout((err) => {
+    if (err) {
+      console.error('Logout error:', err);
+      return res.status(500).json({ error: 'Logout failed' });
+    }
     res.redirect(FRONTEND_URL);
   });
 });
