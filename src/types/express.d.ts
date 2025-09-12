@@ -15,6 +15,10 @@ declare global {
 
     interface Request {
       user?: User;
+      logout(callback?: (err: any) => void): void;
+      logOut(callback?: (err: any) => void): void;
+      isAuthenticated(): boolean;
+      isUnauthenticated(): boolean;
     }
   }
 }

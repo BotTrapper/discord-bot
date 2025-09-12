@@ -9,7 +9,7 @@ import connectPgSimple from 'connect-pg-simple';
 import passport from 'passport';
 // @ts-ignore - No type definitions available
 import { Strategy as DiscordStrategy } from 'passport-discord';
-import jwt from 'jsonwebtoken';
+import * as jwt from 'jsonwebtoken';
 import { dbManager } from '../database/database.js';
 import { featureManager, type FeatureName } from '../features/featureManager.js';
 import { versionManager } from '../utils/version.js';
