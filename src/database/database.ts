@@ -16,13 +16,15 @@ export class DatabaseManager {
 
     this.pool = new Pool({
       connectionString,
-      ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+          ssl: process.env.NODE_ENV === 'production' && process.env.DB_SSL === 'true' 
+      ? { rejectUnauthorized: false } 
+      : false,
       max: 10, // Maximum number of clients in the pool
       idleTimeoutMillis: 30000, // How long a client is allowed to remain idle
       connectionTimeoutMillis: 10000, // How long to wait when connecting a client (10 seconds)
       statement_timeout: 30000, // How long to wait for a query to complete (30 seconds)
       query_timeout: 30000, // Query timeout
-      application_name: 'BotTrapper-Discord-Bot'
+      application_name: 'BotTrapper-Discord-Bot',
     });
 
     this.pool.on('connect', (client) => {
