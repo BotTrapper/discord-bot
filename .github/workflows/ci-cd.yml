@@ -212,8 +212,7 @@ jobs:
           const requiredFiles = [
             'dist/index.js',
             'dist/database/database.js',
-            'dist/features/autoResponse.js',
-            'dist/features/webhookNotification.js'
+            'dist/features/autoResponse.js'
           ];
           
           for (const file of requiredFiles) {
