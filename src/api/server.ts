@@ -9,7 +9,7 @@ import connectPgSimple from 'connect-pg-simple';
 import passport from 'passport';
 // @ts-ignore - No type definitions available
 import { Strategy as DiscordStrategy } from 'passport-discord';
-import * as jwt from 'jsonwebtoken';
+import { sign as jwtSign, verify as jwtVerify } from 'jsonwebtoken';
 import { dbManager } from '../database/database.js';
 import { featureManager, type FeatureName } from '../features/featureManager.js';
 import { versionManager } from '../utils/version.js';
@@ -204,7 +204,7 @@ const requireAuth = async (req: Request, res: Response, next: NextFunction) => {
   if (authHeader && authHeader.startsWith('Bearer ')) {
     try {
       const token = authHeader.substring(7);
-      const decoded = jwt.verify(token, JWT_SECRET) as any;
+      const decoded = jwtVerify(token, JWT_SECRET) as any;
 
       // Check if token exists in database and is still valid
       const storedToken = await dbManager.getUserToken(decoded.userId);
@@ -501,7 +501,7 @@ app.get('/auth/discord/callback',
   passport.authenticate('discord', { failureRedirect: `${FRONTEND_URL}/login?error=failed` }),
   async (req: Request, res: Response) => {
     const user = req.user as any;
-    const token = jwt.sign(
+    const token = jwtSign(
       { userId: user.id },
       JWT_SECRET,
       { expiresIn: '24h' }
