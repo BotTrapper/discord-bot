@@ -1,6 +1,7 @@
 import { SlashCommandBuilder } from 'discord.js';
 import { EmbedBuilderFeature } from '../features/embedBuilder.js';
 import { dbManager } from '../database/database.js';
+import { featureManager } from '../features/featureManager.js';
 
 export const data = new SlashCommandBuilder()
   .setName('stats')
@@ -23,6 +24,16 @@ export const data = new SlashCommandBuilder()
       .setDescription('Zeige allgemeine Bot-Übersicht'));
 
 export async function execute(interaction: any) {
+  // Feature check - Block command if statistics are disabled
+  const isStatisticsFeatureEnabled = await featureManager.isFeatureEnabled(interaction.guild.id, 'statistics');
+
+  if (!isStatisticsFeatureEnabled) {
+    return await interaction.reply({
+      content: '⛔ Das Statistik-System ist für diesen Server deaktiviert.',
+      ephemeral: true
+    });
+  }
+
   const subcommand = interaction.options.getSubcommand();
 
   switch (subcommand) {

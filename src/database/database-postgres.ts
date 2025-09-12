@@ -44,25 +44,10 @@ export class DatabaseManager {
           reason TEXT NOT NULL,
           status TEXT DEFAULT 'open',
           channel_id TEXT,
-          transcript TEXT, -- Stores the ticket transcript
           created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
           closed_at TIMESTAMP WITH TIME ZONE,
           guild_id TEXT
         )
-      `);
-
-      // Add transcript column if it doesn't exist (migration)
-      await client.query(`
-        DO $$ 
-        BEGIN 
-          IF NOT EXISTS (
-            SELECT column_name 
-            FROM information_schema.columns 
-            WHERE table_name='tickets' AND column_name='transcript'
-          ) THEN
-            ALTER TABLE tickets ADD COLUMN transcript TEXT;
-          END IF;
-        END $$;
       `);
 
       // Auto responses table
@@ -228,12 +213,12 @@ export class DatabaseManager {
     try {
       let query = `SELECT * FROM tickets WHERE guild_id = $1`;
       const params = [guildId];
-      
+
       if (status) {
         query += ` AND status = $2`;
         params.push(status);
       }
-      
+
       query += ` ORDER BY created_at DESC`;
 
       const result = await client.query(query, params);
@@ -262,50 +247,6 @@ export class DatabaseManager {
   }
 
   // Auto response methods
-  // Ticket transcript methods
-  async saveTicketTranscript(ticketId: number, transcript: string) {
-    const client = await this.pool.connect();
-    try {
-      const result = await client.query(
-        `UPDATE tickets SET transcript = $1 WHERE id = $2`,
-        [transcript, ticketId]
-      );
-      return result.rowCount;
-    } finally {
-      client.release();
-    }
-  }
-
-  async getTicketTranscript(ticketId: number, guildId: string) {
-    const client = await this.pool.connect();
-    try {
-      const result = await client.query(
-        `SELECT id, user_id, username, reason, transcript, created_at, closed_at 
-         FROM tickets WHERE id = $1 AND guild_id = $2 AND transcript IS NOT NULL`,
-        [ticketId, guildId]
-      );
-      return result.rows[0] || null;
-    } finally {
-      client.release();
-    }
-  }
-
-  async getTicketsWithTranscripts(guildId: string) {
-    const client = await this.pool.connect();
-    try {
-      const result = await client.query(
-        `SELECT id, user_id, username, reason, created_at, closed_at 
-         FROM tickets 
-         WHERE guild_id = $1 AND status = 'closed' AND transcript IS NOT NULL 
-         ORDER BY closed_at DESC`,
-        [guildId]
-      );
-      return result.rows;
-    } finally {
-      client.release();
-    }
-  }
-
   async addAutoResponse(responseData: {
     trigger: string;
     response: string;

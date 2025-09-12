@@ -24,6 +24,18 @@ export async function initializeDatabase() {
  */
 export async function initializeGuildDefaults(guildId: string) {
   try {
+    // Initialize default guild settings if they don't exist
+    const existingSettings = await dbManager.getGuildSettings(guildId);
+
+    // If guild settings don't exist in database, create them
+    if (!existingSettings.id) {
+      const defaultFeatures = ['tickets', 'autoresponses', 'statistics', 'webhooks'];
+      const defaultSettings = {};
+
+      await dbManager.updateGuildSettings(guildId, defaultFeatures, defaultSettings);
+      console.log(`✅ Default guild settings created for guild ${guildId}`);
+    }
+
     // Check if guild already has auto responses
     const existingResponses = await dbManager.getAutoResponses(guildId) as any[];
     

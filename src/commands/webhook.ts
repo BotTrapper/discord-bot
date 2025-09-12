@@ -2,6 +2,7 @@ import { SlashCommandBuilder, PermissionFlagsBits } from 'discord.js';
 import { WebhookNotification } from '../features/webhookNotification.js';
 import { EmbedBuilderFeature } from '../features/embedBuilder.js';
 import { dbManager } from '../database/database.js';
+import { featureManager } from '../features/featureManager.js';
 
 export const data = new SlashCommandBuilder()
   .setName('webhook')
@@ -45,6 +46,16 @@ export const data = new SlashCommandBuilder()
           .setRequired(false)));
 
 export async function execute(interaction: any) {
+  // Feature check - Block command if webhooks are disabled
+  const isWebhookFeatureEnabled = await featureManager.isFeatureEnabled(interaction.guild.id, 'webhooks');
+
+  if (!isWebhookFeatureEnabled) {
+    return await interaction.reply({
+      content: '⛔ Das Webhook-System ist für diesen Server deaktiviert.',
+      ephemeral: true
+    });
+  }
+
   const subcommand = interaction.options.getSubcommand();
 
   switch (subcommand) {

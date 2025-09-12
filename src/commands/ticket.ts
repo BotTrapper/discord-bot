@@ -1,4 +1,5 @@
 import { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, PermissionFlagsBits, MessageFlags } from 'discord.js';
+import { featureManager } from '../features/featureManager.js';
 
 export const data = new SlashCommandBuilder()
   .setName('ticket')
@@ -22,6 +23,16 @@ export const data = new SlashCommandBuilder()
   .setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels);
 
 export async function execute(interaction: any) {
+  // Feature check - Block command if tickets are disabled
+  const isTicketFeatureEnabled = await featureManager.isFeatureEnabled(interaction.guild.id, 'tickets');
+
+  if (!isTicketFeatureEnabled) {
+    return await interaction.reply({
+      content: '⛔ Das Ticket-System ist für diesen Server deaktiviert.',
+      flags: MessageFlags.Ephemeral
+    });
+  }
+
   const subcommand = interaction.options.getSubcommand();
 
   switch (subcommand) {

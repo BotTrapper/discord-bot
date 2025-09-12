@@ -1,6 +1,7 @@
 import { SlashCommandBuilder, PermissionFlagsBits } from 'discord.js';
 import { AutoResponseFeature } from '../features/autoResponse.js';
 import { EmbedBuilderFeature } from '../features/embedBuilder.js';
+import { featureManager } from '../features/featureManager.js';
 
 export const data = new SlashCommandBuilder()
   .setName('autoresponse')
@@ -36,6 +37,16 @@ export const data = new SlashCommandBuilder()
       .setDescription('Zeige alle automatischen Antworten'));
 
 export async function execute(interaction: any) {
+  // Feature check - Block command if autoresponses are disabled
+  const isAutoResponseFeatureEnabled = await featureManager.isFeatureEnabled(interaction.guild.id, 'autoresponses');
+
+  if (!isAutoResponseFeatureEnabled) {
+    return await interaction.reply({
+      content: '⛔ Das Auto-Response-System ist für diesen Server deaktiviert.',
+      ephemeral: true
+    });
+  }
+
   const subcommand = interaction.options.getSubcommand();
 
   switch (subcommand) {

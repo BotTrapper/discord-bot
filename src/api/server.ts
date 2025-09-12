@@ -6,6 +6,7 @@ import passport from 'passport';
 import { Strategy as DiscordStrategy, Profile } from 'passport-discord';
 import jwt from 'jsonwebtoken';
 import { dbManager } from '../database/database.js';
+import { featureManager, type FeatureName } from '../features/featureManager.js';
 import type {Client, Snowflake} from 'discord.js';
 
 // Request logging middleware
@@ -124,6 +125,13 @@ let discordClient: Client;
 
 export function setDiscordClient(client: Client) {
   discordClient = client;
+}
+
+// Store command registration function reference
+let registerGuildCommandsFunction: ((guildId: string) => Promise<void>) | null = null;
+
+export function setRegisterGuildCommandsFunction(fn: (guildId: string) => Promise<void>) {
+  registerGuildCommandsFunction = fn;
 }
 
 // Middleware to check authentication (Session OR JWT)
@@ -387,6 +395,101 @@ app.get('/api/discord/:guildId/roles', requireAuth, requireGuildAccess, async (r
   }
 });
 
+// Guild Settings/Features API routes
+app.get('/api/settings/:guildId', requireAuth, requireGuildAccess, async (req: Request, res: Response) => {
+  try {
+    const { guildId } = req.params;
+
+    if (!guildId) {
+      return res.status(400).json({ error: 'Guild ID is required' });
+    }
+
+    const settings = await dbManager.getGuildSettings(guildId);
+    const enabledFeatures = await featureManager.getEnabledFeatures(guildId);
+
+    res.json({
+      guildId,
+      enabledFeatures,
+      settings: settings.settings || {},
+      updatedAt: settings.updatedAt
+    });
+  } catch (error) {
+    console.error('Get guild settings error:', error);
+    res.status(500).json({ error: 'Failed to fetch guild settings' });
+  }
+});
+
+app.put('/api/settings/:guildId/features', requireAuth, requireGuildAccess, async (req: Request, res: Response) => {
+  try {
+    const { guildId } = req.params;
+    const { features } = req.body;
+
+    if (!guildId) {
+      return res.status(400).json({ error: 'Guild ID is required' });
+    }
+
+    if (!features || typeof features !== 'object') {
+      return res.status(400).json({ error: 'Features object is required' });
+    }
+
+    // Validate feature names
+    const validFeatures: FeatureName[] = ['tickets', 'autoresponses', 'statistics', 'webhooks'];
+    for (const feature in features) {
+      if (!validFeatures.includes(feature as FeatureName)) {
+        return res.status(400).json({ error: `Invalid feature: ${feature}` });
+      }
+    }
+
+    await featureManager.updateFeatures(guildId, features);
+
+    // **IMPORTANT: Update Discord slash commands for this guild**
+    if (registerGuildCommandsFunction) {
+      console.log(`🔄 Updating slash commands for guild ${guildId} due to feature changes...`);
+      try {
+        await registerGuildCommandsFunction(guildId);
+        console.log(`✅ Slash commands updated successfully for guild ${guildId}`);
+      } catch (commandError) {
+        console.error(`❌ Failed to update commands for guild ${guildId}:`, commandError);
+        // Don't fail the whole request if command update fails
+      }
+    } else {
+      console.warn('⚠️ registerGuildCommandsFunction not available - commands not updated');
+    }
+
+    console.log(`Features updated for guild ${guildId}:`, features);
+
+    res.json({
+      success: true,
+      enabledFeatures: await featureManager.getEnabledFeatures(guildId),
+      commandsUpdated: !!registerGuildCommandsFunction
+    });
+  } catch (error) {
+    console.error('Update guild features error:', error);
+    res.status(500).json({ error: 'Failed to update guild features' });
+  }
+});
+
+app.get('/api/settings/:guildId/features/:feature/status', requireAuth, requireGuildAccess, async (req: Request, res: Response) => {
+  try {
+    const { guildId, feature } = req.params;
+
+    if (!guildId || !feature) {
+      return res.status(400).json({ error: 'Guild ID and feature are required' });
+    }
+
+    const isEnabled = await featureManager.isFeatureEnabled(guildId, feature as FeatureName);
+
+    res.json({
+      guildId,
+      feature,
+      enabled: isEnabled
+    });
+  } catch (error) {
+    console.error('Check feature status error:', error);
+    res.status(500).json({ error: 'Failed to check feature status' });
+  }
+});
+
 // @ts-ignore
 app.get('/api/discord/:guildId/members', requireAuth, requireGuildAccess, async (req: Request, res: Response) => {
   try {
@@ -479,6 +582,184 @@ app.get('/api/discord/:guildId/members', requireAuth, requireGuildAccess, async 
   } catch (error) {
     console.error('Get guild members error:', error);
     res.status(500).json({ error: 'Failed to fetch guild members' });
+  }
+});
+
+// Tickets endpoints
+app.get('/api/tickets/:guildId', requireAuth, requireGuildAccess, async (req: Request, res: Response) => {
+  try {
+    const { guildId } = req.params;
+    const { status } = req.query;
+
+    const tickets = await dbManager.getTickets(guildId, status ? String(status) : undefined);
+    res.json(tickets);
+  } catch (error) {
+    console.error('Get tickets error:', error);
+    res.status(500).json({ error: 'Failed to fetch tickets' });
+  }
+});
+
+// Ticket transcripts endpoints
+app.get('/api/tickets/:guildId/transcripts', requireAuth, requireGuildAccess, async (req: Request, res: Response) => {
+  try {
+    const { guildId } = req.params;
+
+    const transcripts = await dbManager.getTicketsWithTranscripts(guildId);
+    res.json(transcripts);
+  } catch (error) {
+    console.error('Get ticket transcripts error:', error);
+    res.status(500).json({ error: 'Failed to fetch ticket transcripts' });
+  }
+});
+
+app.get('/api/tickets/:guildId/transcript/:ticketId', requireAuth, requireGuildAccess, async (req: Request, res: Response) => {
+  try {
+    const { guildId, ticketId } = req.params;
+
+    if (!ticketId) {
+      return res.status(400).json({ error: 'Ticket ID is required' });
+    }
+
+    const transcript = await dbManager.getTicketTranscript(parseInt(ticketId), guildId);
+
+    if (!transcript) {
+      return res.status(404).json({ error: 'Ticket transcript not found' });
+    }
+
+    res.json(transcript);
+  } catch (error) {
+    console.error('Get ticket transcript error:', error);
+    res.status(500).json({ error: 'Failed to fetch ticket transcript' });
+  }
+});
+
+// Tickets endpoints
+app.post('/api/tickets', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const { userId, username, reason, guildId, channelId } = req.body;
+
+    if (!userId || !username || !reason || !guildId) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    const ticketId = await dbManager.createTicket({
+      userId,
+      username,
+      reason,
+      channelId: channelId || null,
+      guildId
+    });
+    res.json({ success: true, ticketId });
+  } catch (error) {
+    console.error('Create ticket error:', error);
+    res.status(500).json({ error: 'Failed to create ticket' });
+  }
+});
+
+app.patch('/api/tickets/:ticketId/close', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const { ticketId } = req.params;
+
+    if (!ticketId) {
+      return res.status(400).json({ error: 'Ticket ID is required' });
+    }
+
+    const result = await dbManager.closeTicket(parseInt(ticketId));
+
+    if (result === 0) {
+      return res.status(404).json({ error: 'Ticket not found' });
+    }
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Close ticket error:', error);
+    res.status(500).json({ error: 'Failed to close ticket' });
+  }
+});
+
+app.delete('/api/tickets/:ticketId', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const { ticketId } = req.params;
+
+    if (!ticketId) {
+      return res.status(400).json({ error: 'Ticket ID is required' });
+    }
+
+    const result = await dbManager.deleteTicket(parseInt(ticketId));
+
+    if (result === 0) {
+      return res.status(404).json({ error: 'Ticket not found' });
+    }
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Delete ticket error:', error);
+    res.status(500).json({ error: 'Failed to delete ticket' });
+  }
+});
+
+// Auto Response endpoints
+app.get('/api/autoresponses/:guildId', requireAuth, requireGuildAccess, async (req: Request, res: Response) => {
+  try {
+    const { guildId } = req.params;
+
+    const autoResponses = await dbManager.getAutoResponses(guildId);
+    res.json(autoResponses);
+  } catch (error) {
+    console.error('Get auto responses error:', error);
+    res.status(500).json({ error: 'Failed to fetch auto responses' });
+  }
+});
+
+app.post('/api/autoresponses/:guildId', requireAuth, requireGuildAccess, async (req: Request, res: Response) => {
+  try {
+    const { guildId } = req.params;
+    const { trigger, response, isEmbed, embedTitle, embedDescription, embedColor } = req.body;
+
+    if (!trigger || (!response && !embedDescription)) {
+      return res.status(400).json({ error: 'Trigger and response/embedDescription are required' });
+    }
+
+    const autoResponseId = await dbManager.addAutoResponse({
+      trigger,
+      response: response || embedDescription,
+      isEmbed,
+      embedTitle,
+      embedDescription,
+      embedColor,
+      guildId
+    });
+
+    if (!autoResponseId) {
+      return res.status(409).json({ error: 'Auto response with this trigger already exists' });
+    }
+
+    res.json({ success: true, id: autoResponseId });
+  } catch (error) {
+    console.error('Create auto response error:', error);
+    res.status(500).json({ error: 'Failed to create auto response' });
+  }
+});
+
+app.delete('/api/autoresponses/:guildId/:trigger', requireAuth, requireGuildAccess, async (req: Request, res: Response) => {
+  try {
+    const { guildId, trigger } = req.params;
+
+    if (!trigger) {
+      return res.status(400).json({ error: 'Trigger is required' });
+    }
+
+    const decodedTrigger = decodeURIComponent(trigger);
+    const result = await dbManager.removeAutoResponse(decodedTrigger, guildId);
+
+    if (result === 0) {
+      return res.status(404).json({ error: 'Auto response not found' });
+    }
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Delete auto response error:', error);
+    res.status(500).json({ error: 'Failed to delete auto response' });
   }
 });
 

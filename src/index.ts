@@ -2,9 +2,10 @@ import { Client, GatewayIntentBits, REST, Routes, Collection, type Interaction }
 import { AutoResponseFeature } from './features/autoResponse.js';
 import { WebhookNotification } from './features/webhookNotification.js';
 import { PermissionManager } from './features/permissionManager.js';
+import { featureManager } from './features/featureManager.js';
 import { dbManager } from './database/database.js';
 import { initializeDatabase, initializeGuildDefaults } from './database/migrations.js';
-import { startApiServer, setDiscordClient } from './api/server.js';
+import { startApiServer, setDiscordClient, setRegisterGuildCommandsFunction } from './api/server.js';
 import * as ticketCommand from './commands/ticket.js';
 import * as embedCommand from './commands/embed.js';
 import * as autoresponseCommand from './commands/autoresponse.js';
@@ -16,8 +17,9 @@ const client = new Client({
   intents: [
     GatewayIntentBits.Guilds, 
     GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent
-  ] 
+    GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildMembers // Hinzugefügt für Member-Zugriff
+  ]
 });
 
 // Commands collection
@@ -27,6 +29,15 @@ commands.set(embedCommand.data.name, embedCommand);
 commands.set(autoresponseCommand.data.name, autoresponseCommand);
 commands.set(webhookCommand.data.name, webhookCommand);
 commands.set(statsCommand.data.name, statsCommand);
+
+// Map commands to their required features
+const COMMAND_FEATURE_MAP: Record<string, string> = {
+  'ticket': 'tickets',
+  'autoresponse': 'autoresponses',
+  'stats': 'statistics',
+  'webhook': 'webhooks',
+  // 'embed' is always available (no feature requirement)
+};
 
 const TOKEN = process.env.DISCORD_TOKEN || '';
 const CLIENT_ID = process.env.CLIENT_ID || '';
@@ -64,6 +75,41 @@ async function registerCommands() {
   }
 }
 
+// New function: Register commands for specific guild based on enabled features
+async function registerGuildCommands(guildId: string) {
+  try {
+    console.log(`🔄 Updating commands for guild ${guildId}...`);
+
+    // Get enabled features for this guild
+    const enabledFeatures = await featureManager.getEnabledFeatures(guildId);
+    console.log(`Enabled features for guild ${guildId}:`, enabledFeatures);
+
+    // Filter commands based on enabled features
+    const availableCommands = commandsData.filter(commandData => {
+      const requiredFeature = COMMAND_FEATURE_MAP[commandData.name];
+
+      // If no feature requirement, always include (like 'embed' command)
+      if (!requiredFeature) return true;
+
+      // Only include if feature is enabled
+      return enabledFeatures.includes(requiredFeature);
+    });
+
+    console.log(`Registering ${availableCommands.length}/${commandsData.length} commands for guild ${guildId}`);
+    console.log('Available commands:', availableCommands.map(cmd => cmd.name));
+
+    // Register only available commands for this guild
+    await rest.put(
+      Routes.applicationGuildCommands(CLIENT_ID, guildId),
+      { body: availableCommands },
+    );
+
+    console.log(`✅ Guild commands updated for ${guildId}`);
+  } catch (error) {
+    console.error(`❌ Error updating guild commands for ${guildId}:`, error);
+  }
+}
+
 // Initialize data from database for all guilds
 async function initializeGuildData() {
   try {
@@ -84,6 +130,188 @@ async function initializeGuildData() {
   }
 }
 
+// Function to generate channel transcript
+async function generateChannelTranscript(channel: any): Promise<string> {
+  try {
+    console.log(`🔄 Generating transcript for channel ${channel.name}...`);
+
+    // Fetch all messages from the channel
+    const messages: any[] = [];
+    let lastMessageId: string | undefined;
+
+    // Discord API allows fetching max 100 messages per request
+    while (true) {
+      const options: any = { limit: 100 };
+      if (lastMessageId) {
+        options.before = lastMessageId;
+      }
+
+      const fetchedMessages = await channel.messages.fetch(options);
+
+      if (fetchedMessages.size === 0) {
+        break;
+      }
+
+      messages.push(...Array.from(fetchedMessages.values()));
+      lastMessageId = fetchedMessages.last()?.id;
+
+      // Safety limit to prevent infinite loops or extremely large transcripts
+      if (messages.length > 1000) {
+        console.log(`⚠️ Transcript limited to 1000 messages for channel ${channel.name}`);
+        break;
+      }
+    }
+
+    // Sort messages by creation time (oldest first)
+    messages.sort((a, b) => a.createdTimestamp - b.createdTimestamp);
+
+    // Create a member cache for ID resolution
+    const memberCache = new Map();
+    try {
+      // Fetch guild members for ID resolution
+      if (channel.guild) {
+        const members = await channel.guild.members.fetch();
+        members.forEach(member => {
+          memberCache.set(member.id, {
+            username: member.user.username,
+            displayName: member.displayName,
+            nickname: member.nickname
+          });
+        });
+        console.log(`✅ Cached ${memberCache.size} members for ID resolution`);
+      }
+    } catch (memberError) {
+      console.warn('⚠️ Could not fetch guild members for ID resolution:', memberError);
+    }
+
+    // Function to resolve mentions in text
+    const resolveMentions = (text: string): string => {
+      if (!text) return text;
+
+      // Resolve user mentions <@123123> and <@!123123>
+      text = text.replace(/<@!?(\d+)>/g, (match, userId) => {
+        const member = memberCache.get(userId);
+        if (member) {
+          return `@${member.displayName || member.username}`;
+        }
+        return match; // Keep original if not found
+      });
+
+      // Resolve channel mentions <#123123>
+      text = text.replace(/<#(\d+)>/g, (match, channelId) => {
+        if (channel.guild) {
+          const mentionedChannel = channel.guild.channels.cache.get(channelId);
+          if (mentionedChannel) {
+            return `#${mentionedChannel.name}`;
+          }
+        }
+        return match; // Keep original if not found
+      });
+
+      // Resolve role mentions <@&123123>
+      text = text.replace(/<@&(\d+)>/g, (match, roleId) => {
+        if (channel.guild) {
+          const role = channel.guild.roles.cache.get(roleId);
+          if (role) {
+            return `@${role.name}`;
+          }
+        }
+        return match; // Keep original if not found
+      });
+
+      return text;
+    };
+
+    // Generate structured transcript data as JSON
+    const transcriptData = {
+      header: {
+        channelName: channel.name,
+        channelId: channel.id,
+        guildName: channel.guild?.name,
+        generated: new Date().toISOString(),
+        totalMessages: messages.length,
+        memberCount: memberCache.size
+      },
+      messages: messages.map(message => ({
+        id: message.id,
+        timestamp: message.createdAt.toISOString(),
+        author: {
+          id: message.author.id,
+          username: message.author.username,
+          discriminator: message.author.discriminator,
+          avatar: message.author.avatar,
+          bot: message.author.bot,
+          displayName: message.member?.displayName || message.author.username
+        },
+        content: resolveMentions(message.content), // Resolve mentions in content
+        attachments: message.attachments.map((attachment: any) => ({
+          id: attachment.id,
+          name: attachment.name,
+          url: attachment.url,
+          proxyUrl: attachment.proxyUrl,
+          size: attachment.size,
+          contentType: attachment.contentType,
+          width: attachment.width,
+          height: attachment.height
+        })),
+        embeds: message.embeds.map((embed: any) => ({
+          title: embed.title ? resolveMentions(embed.title) : undefined,
+          description: embed.description ? resolveMentions(embed.description) : undefined,
+          url: embed.url,
+          color: embed.color,
+          timestamp: embed.timestamp,
+          footer: embed.footer ? {
+            text: resolveMentions(embed.footer.text),
+            iconURL: embed.footer.iconURL
+          } : undefined,
+          image: embed.image,
+          thumbnail: embed.thumbnail,
+          author: embed.author ? {
+            name: resolveMentions(embed.author.name),
+            url: embed.author.url,
+            iconURL: embed.author.iconURL
+          } : undefined,
+          fields: embed.fields?.map((field: any) => ({
+            name: resolveMentions(field.name),
+            value: resolveMentions(field.value),
+            inline: field.inline
+          }))
+        })),
+        reactions: message.reactions.cache.map((reaction: any) => ({
+          emoji: {
+            name: reaction.emoji.name,
+            id: reaction.emoji.id,
+            animated: reaction.emoji.animated
+          },
+          count: reaction.count
+        })),
+        edited: message.editedTimestamp ? message.editedAt.toISOString() : null,
+        pinned: message.pinned,
+        type: message.type
+      }))
+    };
+
+    console.log(`✅ Generated structured transcript with ${messages.length} messages for channel ${channel.name}`);
+    console.log(`✅ Resolved mentions using ${memberCache.size} cached members`);
+    return JSON.stringify(transcriptData, null, 2);
+
+  } catch (error) {
+    console.error('Error generating transcript:', error);
+
+    // Return a basic error transcript rather than failing completely
+    const errorData = {
+      header: {
+        channelName: channel?.name || 'Unknown',
+        error: error instanceof Error ? error.message : 'Unknown error',
+        generated: new Date().toISOString()
+      },
+      messages: []
+    };
+
+    return JSON.stringify(errorData, null, 2);
+  }
+}
+
 // Starte den API Server und verbinde den Discord Client
 async function main() {
   try {
@@ -94,6 +322,9 @@ async function main() {
 
       // Verbinde den Discord Client mit dem API Server
       setDiscordClient(client);
+
+      // Register the guild commands function with the API server
+      setRegisterGuildCommandsFunction(registerGuildCommands);
 
       // Register commands
       await registerCommands();
@@ -163,6 +394,16 @@ async function main() {
       // Handle button interactions
       if (interaction.isButton()) {
         if (interaction.customId === 'close_ticket') {
+          // Check if tickets feature is enabled for this guild
+          const isTicketFeatureEnabled = await featureManager.isFeatureEnabled(interaction.guild!.id, 'tickets');
+          if (!isTicketFeatureEnabled) {
+            await interaction.reply({
+              content: '⛔ Das Ticket-System ist für diesen Server deaktiviert.',
+              flags: 64
+            });
+            return;
+          }
+
           const channel = interaction.channel;
 
           if (!channel || !('name' in channel) || !channel.name?.startsWith('ticket-')) {
@@ -179,7 +420,19 @@ async function main() {
             const ticket = tickets.find(t => t.channel_id === channel.id);
 
             if (ticket) {
+              // Generate transcript BEFORE closing the ticket
+              console.log(`🔄 Generating transcript for ticket ${ticket.id} in channel ${channel.name}...`);
+              try {
+                const transcript = await generateChannelTranscript(channel);
+                await dbManager.saveTicketTranscript(ticket.id, transcript);
+                console.log(`✅ Transcript saved for ticket ${ticket.id}`);
+              } catch (transcriptError) {
+                console.error('❌ Error generating/saving transcript:', transcriptError);
+                // Continue with closing even if transcript fails
+              }
+
               await dbManager.closeTicket(ticket.id);
+              console.log(`✅ Ticket ${ticket.id} closed successfully`);
 
               // Send webhook notification
               try {
@@ -192,6 +445,8 @@ async function main() {
               } catch (webhookError) {
                 console.log('Webhook notification failed:', webhookError);
               }
+            } else {
+              console.log(`⚠️ No open ticket found for channel ${channel.id}`);
             }
           } catch (error) {
             console.error('Error closing ticket in database:', error);
@@ -210,6 +465,16 @@ async function main() {
 
         // Kategorie-Ticket Button Handler
         if (interaction.customId?.startsWith('ticket_')) {
+          // Check if tickets feature is enabled for this guild
+          const isTicketFeatureEnabled = await featureManager.isFeatureEnabled(interaction.guild!.id, 'tickets');
+          if (!isTicketFeatureEnabled) {
+            await interaction.reply({
+              content: '⛔ Das Ticket-System ist für diesen Server deaktiviert.',
+              flags: 64
+            });
+            return;
+          }
+
           const category = interaction.customId.replace('ticket_', '');
 
           // Import der createCategoryTicket Funktion

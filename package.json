@@ -19,7 +19,10 @@
     "test:integration": "echo '✅ Integration tests passed (placeholder)'",
     "test:docker": "docker build -t discord-bot:test . && docker run --rm discord-bot:test node --version",
     "lint": "echo '✅ Linting passed (placeholder)'",
-    "security-check": "npm audit --audit-level moderate"
+    "security-check": "npm audit --audit-level moderate",
+    "db:setup": "docker-compose -f docker-compose.postgres.yml up -d",
+    "db:migrate": "tsx src/database/migration.ts",
+    "db:stop": "docker-compose -f docker-compose.postgres.yml down"
   },
   "keywords": [],
   "author": "",
@@ -33,6 +36,7 @@
     "@types/express": "^5.0.3",
     "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^24.3.0",
+    "@types/pg": "^8.15.5",
     "axios": "^1.11.0",
     "bcrypt": "^6.0.0",
     "cors": "^2.8.5",
@@ -44,6 +48,7 @@
     "jsonwebtoken": "^9.0.2",
     "passport": "^0.7.0",
     "passport-discord": "^0.1.4",
+    "pg": "^8.16.3",
     "sqlite3": "^5.1.7",
     "ts-node": "^10.9.2"
   },

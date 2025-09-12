@@ -43,7 +43,9 @@ export class PermissionManager {
   // Save user permissions to database
   static async setUserPermissions(userId: string, guildId: string, role: string, permissions: UserPermissions) {
     try {
-      await dbManager.setUserPermissions(userId, guildId, role, permissions);
+      // Convert UserPermissions object to string array
+      const permissionArray = Object.keys(permissions).filter(key => permissions[key as keyof UserPermissions]);
+      await dbManager.setUserPermissions(userId, guildId, role, permissionArray);
       return true;
     } catch (error) {
       console.error('Error setting user permissions:', error);
