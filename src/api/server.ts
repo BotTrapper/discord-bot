@@ -1,34 +1,41 @@
 import 'dotenv/config';
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
+// @ts-ignore - No type definitions available
 import session from 'express-session';
+// @ts-ignore - No type definitions available
 import passport from 'passport';
-import { Strategy as DiscordStrategy, Profile } from 'passport-discord';
+// @ts-ignore - No type definitions available
+import { Strategy as DiscordStrategy } from 'passport-discord';
 import jwt from 'jsonwebtoken';
 import { dbManager } from '../database/database.js';
 import { featureManager, type FeatureName } from '../features/featureManager.js';
 import type {Client, Snowflake} from 'discord.js';
 
-// Type declarations for passport modules without types
-declare module 'passport' {
-  interface AuthenticateOptions {
-    failureRedirect?: string;
-  }
+// Type definitions for untyped modules
+interface DiscordProfile {
+  id: string;
+  username: string;
+  discriminator: string;
+  avatar: string | null;
+  guilds?: any[];
 }
 
-declare module 'express-session' {
-  interface SessionData {
-    passport?: any;
-  }
-}
-
-declare module 'passport-discord' {
-  interface Profile {
-    id: string;
-    username: string;
-    discriminator: string;
-    avatar: string | null;
-    guilds?: any[];
+// Extend Express Request type to include user
+declare global {
+  namespace Express {
+    interface Request {
+      user?: {
+        id: string;
+        username?: string;
+        discriminator?: string;
+        avatar?: string | null;
+        guilds?: any[];
+        accessToken?: string;
+        refreshToken?: string;
+      };
+      logout?: (callback: (err?: any) => void) => void;
+    }
   }
 }
 
@@ -68,21 +75,6 @@ const requestLogger = (req: Request, res: Response, next: NextFunction) => {
   next();
 };
 
-// Extend Express Request type to include user
-declare global {
-  namespace Express {
-    interface User {
-      id: string;
-      username: string;
-      discriminator: string;
-      avatar: string | null;
-      guilds: any[];
-      accessToken: string;
-      refreshToken: string;
-    }
-  }
-}
-
 const app = express();
 const PORT = process.env.API_PORT || 3001;
 
@@ -118,7 +110,7 @@ passport.use(new DiscordStrategy({
   clientSecret: CLIENT_SECRET,
   callbackURL: `${process.env.API_BASE_URL || 'http://localhost:3001'}/auth/discord/callback`,
   scope: ['identify', 'guilds']
-}, async (accessToken: string, refreshToken: string, profile: Profile, done: (error: any, user?: Express.User | false) => void) => {
+}, async (accessToken: string, refreshToken: string, profile: DiscordProfile, done: (error: any, user?: Express.User | false) => void) => {
   try {
     const user = {
       id: profile.id,
