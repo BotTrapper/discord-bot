@@ -331,16 +331,18 @@ const requireGuildAccess = async (req: Request, res: Response, next: NextFunctio
 };
 
 // Middleware to require global admin access
-const requireGlobalAdmin = async (req: Request, res: Response, next: NextFunction) => {
-  const user = req.user as CustomUser;
+const requireGlobalAdmin = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  const user = req.user;
 
   if (!user?.id) {
-    return res.status(401).json({ error: 'Authentication required' });
+    res.status(401).json({ error: 'Authentication required' });
+    return;
   }
 
   const adminStatus = await dbManager.isGlobalAdmin(user.id);
   if (!adminStatus.isAdmin) {
-    return res.status(403).json({ error: 'Global admin access required' });
+    res.status(403).json({ error: 'Global admin access required' });
+    return;
   }
 
   (req.user as any).isGlobalAdmin = true;
