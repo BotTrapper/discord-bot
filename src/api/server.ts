@@ -350,15 +350,16 @@ const requireGuildAccess = async (req: Request, res: Response, next: NextFunctio
   // Check if user is global admin (bypasses guild access check)
   const adminStatus = await dbManager.isGlobalAdmin(user.id);
   if (adminStatus.isAdmin) {
-    console.log(`✅ Global admin ${user.username} accessing guild ${guildId}`);
+    console.log(`✅ Global admin ${user.username || user.id} (Level ${adminStatus.level}) accessing guild ${guildId} - bypassing guild permission check`);
     (req.user as any).isGlobalAdmin = true;
     (req.user as any).adminLevel = adminStatus.level;
     return next();
   }
 
+  // For non-admin users, check guild permissions
   if (!user.guilds) {
-    console.log('JWT user without guilds data - allowing access');
-    return next();
+    console.log('❌ Non-admin user without guilds data - access denied');
+    return res.status(403).json({ error: 'No access to this guild - missing guild permissions' });
   }
 
   const hasAccess = user.guilds.some((guild: any) =>
@@ -366,9 +367,11 @@ const requireGuildAccess = async (req: Request, res: Response, next: NextFunctio
   );
   
   if (!hasAccess) {
-    return res.status(403).json({ error: 'No access to this guild' });
+    console.log(`❌ User ${user.username || user.id} has no MANAGE_SERVER permission for guild ${guildId}`);
+    return res.status(403).json({ error: 'No access to this guild - MANAGE_SERVER permission required' });
   }
 
+  console.log(`✅ User ${user.username || user.id} has MANAGE_SERVER permission for guild ${guildId}`);
   next();
 };
 
