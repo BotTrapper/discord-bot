@@ -289,25 +289,34 @@ const requireAuth = async (req: Request, res: Response, next: NextFunction) => {
             }
           }
 
-          if (userResponse.ok && guildsResponse.ok) {
+          if (userResponse.ok) {
             const userData = await userResponse.json();
-            const guildsData = await guildsResponse.json();
+            let guildsData = [];
+            
+            // Try to get guilds, but don't fail if rate limited
+            if (guildsResponse.ok) {
+              guildsData = await guildsResponse.json();
+              console.log(`✅ JWT authenticated user with guilds: ${userData.username}#${userData.discriminator}`);
+            } else if (guildsResponse.status === 429) {
+              console.log(`⚠️ Guild data rate limited (429), continuing with user data only: ${userData.username}#${userData.discriminator}`);
+            } else {
+              console.log(`⚠️ Guild data unavailable (${guildsResponse.status}), continuing with user data only: ${userData.username}#${userData.discriminator}`);
+            }
             
             req.user = {
               id: userData.id,
               username: userData.username,
               discriminator: userData.discriminator,
               avatar: userData.avatar,
-              guilds: guildsData,
+              guilds: guildsData, // Empty array if rate limited
               accessToken: accessToken,
               refreshToken: refreshToken
             } as CustomUser;
             
-            console.log(`✅ JWT authenticated user: ${userData.username}#${userData.discriminator}`);
             return next();
           } else {
-            console.log(`❌ Failed to fetch user data from Discord API after refresh attempt - User: ${userResponse.status}, Guilds: ${guildsResponse.status}`);
-            // If refresh also failed, remove token from database
+            console.log(`❌ Failed to fetch user data from Discord API - User: ${userResponse.status}, Guilds: ${guildsResponse.status}`);
+            // If user data failed, remove token from database
             await dbManager.removeUserToken(decoded.userId);
           }
         } catch (discordError) {
