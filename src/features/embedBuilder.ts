@@ -1,11 +1,16 @@
-import { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
+import {
+  EmbedBuilder,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+} from "discord.js";
 
 export class EmbedBuilderFeature {
   static createBasicEmbed(title: string, description: string, color?: number) {
     return new EmbedBuilder()
       .setTitle(title)
       .setDescription(description)
-      .setColor(color || 0x00AE86)
+      .setColor(color || 0x00ae86)
       .setTimestamp();
   }
 
@@ -35,8 +40,12 @@ export class EmbedBuilderFeature {
       embed.setFooter(footerData);
     }
     if (options.fields) {
-      options.fields.forEach(field => {
-        embed.addFields({ name: field.name, value: field.value, inline: field.inline || false });
+      options.fields.forEach((field) => {
+        embed.addFields({
+          name: field.name,
+          value: field.value,
+          inline: field.inline || false,
+        });
       });
     }
     if (options.thumbnail) embed.setThumbnail(options.thumbnail);
@@ -48,25 +57,25 @@ export class EmbedBuilderFeature {
 
   static createSuccessEmbed(message: string) {
     return new EmbedBuilder()
-      .setTitle('✅ Erfolg')
+      .setTitle("✅ Erfolg")
       .setDescription(message)
-      .setColor(0x00FF00)
+      .setColor(0x00ff00)
       .setTimestamp();
   }
 
   static createErrorEmbed(message: string) {
     return new EmbedBuilder()
-      .setTitle('❌ Fehler')
+      .setTitle("❌ Fehler")
       .setDescription(message)
-      .setColor(0xFF0000)
+      .setColor(0xff0000)
       .setTimestamp();
   }
 
   static createInfoEmbed(message: string) {
     return new EmbedBuilder()
-      .setTitle('ℹ️ Information')
+      .setTitle("ℹ️ Information")
       .setDescription(message)
-      .setColor(0x0099FF)
+      .setColor(0x0099ff)
       .setTimestamp();
   }
 }

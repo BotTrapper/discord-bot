@@ -1,25 +1,44 @@
-import { Client, GatewayIntentBits, REST, Routes, Collection, type Interaction, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageFlags } from 'discord.js';
-import { AutoResponseFeature } from './features/autoResponse.js';
-import { PermissionManager } from './features/permissionManager.js';
-import { featureManager, type FeatureName } from './features/featureManager.js';
-import { dbManager } from './database/database.js';
-import { initializeDatabase, initializeGuildDefaults } from './database/migrations.js';
-import { startApiServer, setDiscordClient, setRegisterGuildCommandsFunction } from './api/server.js';
-import { versionManager } from './utils/version.js';
-import * as ticketCommand from './commands/ticket.js';
-import * as embedCommand from './commands/embed.js';
-import * as autoresponseCommand from './commands/autoresponse.js';
-import * as statsCommand from './commands/stats.js';
-import * as changelogCommand from './commands/changelog.js';
-import 'dotenv/config';
+import {
+  Client,
+  GatewayIntentBits,
+  REST,
+  Routes,
+  Collection,
+  type Interaction,
+  EmbedBuilder,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  MessageFlags,
+} from "discord.js";
+import { AutoResponseFeature } from "./features/autoResponse.js";
+import { PermissionManager } from "./features/permissionManager.js";
+import { featureManager, type FeatureName } from "./features/featureManager.js";
+import { dbManager } from "./database/database.js";
+import {
+  initializeDatabase,
+  initializeGuildDefaults,
+} from "./database/migrations.js";
+import {
+  startApiServer,
+  setDiscordClient,
+  setRegisterGuildCommandsFunction,
+} from "./api/server.js";
+import { versionManager } from "./utils/version.js";
+import * as ticketCommand from "./commands/ticket.js";
+import * as embedCommand from "./commands/embed.js";
+import * as autoresponseCommand from "./commands/autoresponse.js";
+import * as statsCommand from "./commands/stats.js";
+import * as changelogCommand from "./commands/changelog.js";
+import "dotenv/config";
 
-const client = new Client({ 
+const client = new Client({
   intents: [
-    GatewayIntentBits.Guilds, 
+    GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildMembers // Hinzugefügt für Member-Zugriff
-  ]
+    GatewayIntentBits.GuildMembers, // Hinzugefügt für Member-Zugriff
+  ],
 });
 
 // Commands collection
@@ -32,16 +51,16 @@ commands.set(changelogCommand.data.name, changelogCommand);
 
 // Map commands to their required features
 const COMMAND_FEATURE_MAP: Record<string, string> = {
-  'ticket': 'tickets',
-  'autoresponse': 'autoresponses',
-  'stats': 'statistics',
+  ticket: "tickets",
+  autoresponse: "autoresponses",
+  stats: "statistics",
   // 'embed' is always available (no feature requirement)
   // 'changelog' is always available (no feature requirement)
 };
 
-const TOKEN = process.env.DISCORD_TOKEN || '';
-const CLIENT_ID = process.env.CLIENT_ID || '';
-const GUILD_ID = process.env.GUILD_ID || ''; // Optional: nur für Development/Testing
+const TOKEN = process.env.DISCORD_TOKEN || "";
+const CLIENT_ID = process.env.CLIENT_ID || "";
+const GUILD_ID = process.env.GUILD_ID || ""; // Optional: nur für Development/Testing
 
 const commandsData = [
   ticketCommand.data.toJSON(),
@@ -51,27 +70,25 @@ const commandsData = [
   changelogCommand.data.toJSON(),
 ];
 
-const rest = new REST({ version: '10' }).setToken(TOKEN);
+const rest = new REST({ version: "10" }).setToken(TOKEN);
 
 async function registerCommands() {
   try {
     if (GUILD_ID) {
       // Development: Register commands für einen spezifischen Server (sofort verfügbar)
-      await rest.put(
-        Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
-        { body: commandsData },
-      );
-      console.log('✅ Guild-specific slash commands registered.');
+      await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), {
+        body: commandsData,
+      });
+      console.log("✅ Guild-specific slash commands registered.");
     } else {
       // Production: Register global commands (verfügbar auf allen Servern)
-      await rest.put(
-        Routes.applicationCommands(CLIENT_ID),
-        { body: commandsData },
-      );
-      console.log('✅ Global slash commands registered for all servers.');
+      await rest.put(Routes.applicationCommands(CLIENT_ID), {
+        body: commandsData,
+      });
+      console.log("✅ Global slash commands registered for all servers.");
     }
   } catch (error) {
-    console.error('❌ Error registering commands:', error);
+    console.error("❌ Error registering commands:", error);
   }
 }
 
@@ -85,7 +102,7 @@ async function registerGuildCommands(guildId: string) {
     console.log(`Enabled features for guild ${guildId}:`, enabledFeatures);
 
     // Filter commands based on enabled features
-    const availableCommands = commandsData.filter(commandData => {
+    const availableCommands = commandsData.filter((commandData) => {
       const requiredFeature = COMMAND_FEATURE_MAP[commandData.name];
 
       // If no feature requirement, always include (like 'embed' command)
@@ -95,14 +112,18 @@ async function registerGuildCommands(guildId: string) {
       return enabledFeatures.includes(requiredFeature as FeatureName);
     });
 
-    console.log(`Registering ${availableCommands.length}/${commandsData.length} commands for guild ${guildId}`);
-    console.log('Available commands:', availableCommands.map(cmd => cmd.name));
+    console.log(
+      `Registering ${availableCommands.length}/${commandsData.length} commands for guild ${guildId}`,
+    );
+    console.log(
+      "Available commands:",
+      availableCommands.map((cmd) => cmd.name),
+    );
 
     // Register only available commands for this guild
-    await rest.put(
-      Routes.applicationGuildCommands(CLIENT_ID, guildId),
-      { body: availableCommands },
-    );
+    await rest.put(Routes.applicationGuildCommands(CLIENT_ID, guildId), {
+      body: availableCommands,
+    });
 
     console.log(`✅ Guild commands updated for ${guildId}`);
   } catch (error) {
@@ -115,15 +136,15 @@ async function initializeGuildData() {
   try {
     // Initialize database first
     await initializeDatabase();
-    
+
     const guilds = client.guilds.cache;
     for (const [guildId] of guilds) {
       // Initialize default data for guild
       await initializeGuildDefaults(guildId);
     }
-    console.log('✅ Guild data initialized from database');
+    console.log("✅ Guild data initialized from database");
   } catch (error) {
-    console.error('❌ Error initializing guild data:', error);
+    console.error("❌ Error initializing guild data:", error);
   }
 }
 
@@ -154,7 +175,9 @@ async function generateChannelTranscript(channel: any): Promise<string> {
 
       // Safety limit to prevent infinite loops or extremely large transcripts
       if (messages.length > 1000) {
-        console.log(`⚠️ Transcript limited to 1000 messages for channel ${channel.name}`);
+        console.log(
+          `⚠️ Transcript limited to 1000 messages for channel ${channel.name}`,
+        );
         break;
       }
     }
@@ -172,13 +195,16 @@ async function generateChannelTranscript(channel: any): Promise<string> {
           memberCache.set(member.id, {
             username: member.user.username,
             displayName: member.displayName,
-            nickname: member.nickname
+            nickname: member.nickname,
           });
         });
         console.log(`✅ Cached ${memberCache.size} members for ID resolution`);
       }
     } catch (memberError) {
-      console.warn('⚠️ Could not fetch guild members for ID resolution:', memberError);
+      console.warn(
+        "⚠️ Could not fetch guild members for ID resolution:",
+        memberError,
+      );
     }
 
     // Function to resolve mentions in text
@@ -227,9 +253,9 @@ async function generateChannelTranscript(channel: any): Promise<string> {
         guildName: channel.guild?.name,
         generated: new Date().toISOString(),
         totalMessages: messages.length,
-        memberCount: memberCache.size
+        memberCount: memberCache.size,
       },
-      messages: messages.map(message => ({
+      messages: messages.map((message) => ({
         id: message.id,
         timestamp: message.createdAt.toISOString(),
         author: {
@@ -238,7 +264,7 @@ async function generateChannelTranscript(channel: any): Promise<string> {
           discriminator: message.author.discriminator,
           avatar: message.author.avatar,
           bot: message.author.bot,
-          displayName: message.member?.displayName || message.author.username
+          displayName: message.member?.displayName || message.author.username,
         },
         content: resolveMentions(message.content), // Resolve mentions in content
         attachments: message.attachments.map((attachment: any) => ({
@@ -249,60 +275,69 @@ async function generateChannelTranscript(channel: any): Promise<string> {
           size: attachment.size,
           contentType: attachment.contentType,
           width: attachment.width,
-          height: attachment.height
+          height: attachment.height,
         })),
         embeds: message.embeds.map((embed: any) => ({
           title: embed.title ? resolveMentions(embed.title) : undefined,
-          description: embed.description ? resolveMentions(embed.description) : undefined,
+          description: embed.description
+            ? resolveMentions(embed.description)
+            : undefined,
           url: embed.url,
           color: embed.color,
           timestamp: embed.timestamp,
-          footer: embed.footer ? {
-            text: resolveMentions(embed.footer.text),
-            iconURL: embed.footer.iconURL
-          } : undefined,
+          footer: embed.footer
+            ? {
+                text: resolveMentions(embed.footer.text),
+                iconURL: embed.footer.iconURL,
+              }
+            : undefined,
           image: embed.image,
           thumbnail: embed.thumbnail,
-          author: embed.author ? {
-            name: resolveMentions(embed.author.name),
-            url: embed.author.url,
-            iconURL: embed.author.iconURL
-          } : undefined,
+          author: embed.author
+            ? {
+                name: resolveMentions(embed.author.name),
+                url: embed.author.url,
+                iconURL: embed.author.iconURL,
+              }
+            : undefined,
           fields: embed.fields?.map((field: any) => ({
             name: resolveMentions(field.name),
             value: resolveMentions(field.value),
-            inline: field.inline
-          }))
+            inline: field.inline,
+          })),
         })),
         reactions: message.reactions.cache.map((reaction: any) => ({
           emoji: {
             name: reaction.emoji.name,
             id: reaction.emoji.id,
-            animated: reaction.emoji.animated
+            animated: reaction.emoji.animated,
           },
-          count: reaction.count
+          count: reaction.count,
         })),
         edited: message.editedTimestamp ? message.editedAt.toISOString() : null,
         pinned: message.pinned,
-        type: message.type
-      }))
+        type: message.type,
+      })),
     };
 
-    console.log(`✅ Generated structured transcript with ${messages.length} messages for channel ${channel.name}`);
-    console.log(`✅ Resolved mentions using ${memberCache.size} cached members`);
+    console.log(
+      `✅ Generated structured transcript with ${messages.length} messages for channel ${channel.name}`,
+    );
+    console.log(
+      `✅ Resolved mentions using ${memberCache.size} cached members`,
+    );
     return JSON.stringify(transcriptData, null, 2);
-
   } catch (error) {
-    console.error('Error generating transcript:', error);
+    console.error("Error generating transcript:", error);
 
     // Return a basic error transcript rather than failing completely
     const errorData = {
       header: {
-        channelName: channel?.name || 'Unknown',
-        error: error instanceof Error ? error.message : 'Unknown error',
-        generated: new Date().toISOString()
+        channelName: channel?.name || "Unknown",
+        error: error instanceof Error ? error.message : "Unknown error",
+        generated: new Date().toISOString(),
       },
-      messages: []
+      messages: [],
     };
 
     return JSON.stringify(errorData, null, 2);
@@ -316,10 +351,10 @@ async function main() {
     const versionInfo = versionManager.getVersionInfo();
     console.log(`🚀 Starting ${versionInfo.name} v${versionInfo.version}`);
     console.log(`📅 Started at: ${versionInfo.startTime.toISOString()}`);
-    
+
     await initializeDatabase();
 
-    client.once('ready', async () => {
+    client.once("ready", async () => {
       console.log(`✅ Bot is ready! Logged in as ${client.user?.tag}`);
 
       // Verbinde den Discord Client mit dem API Server
@@ -334,11 +369,11 @@ async function main() {
       // Initialize guild data from database
       await initializeGuildData();
 
-      console.log('🚀 Bot is fully ready!');
+      console.log("🚀 Bot is fully ready!");
     });
 
     // Handle new guilds
-    client.on('guildCreate', async (guild) => {
+    client.on("guildCreate", async (guild) => {
       console.log(`🎉 Bot added to new guild: ${guild.name} (${guild.id})`);
 
       // Initialize default data for new guild
@@ -348,17 +383,20 @@ async function main() {
     });
 
     // Handle slash commands
-    client.on('interactionCreate', async (interaction: Interaction) => {
+    client.on("interactionCreate", async (interaction: Interaction) => {
       if (interaction.isChatInputCommand()) {
         const command = commands.get(interaction.commandName);
         if (!command) return;
 
         // Check permissions (now async)
-        const hasPermission = await PermissionManager.checkCommandPermission(interaction, interaction.commandName);
+        const hasPermission = await PermissionManager.checkCommandPermission(
+          interaction,
+          interaction.commandName,
+        );
         if (!hasPermission) {
           await interaction.reply({
-            content: '❌ Du hast keine Berechtigung für diesen Befehl!',
-            ephemeral: true
+            content: "❌ Du hast keine Berechtigung für diesen Befehl!",
+            ephemeral: true,
           });
           return;
         }
@@ -368,14 +406,17 @@ async function main() {
           await dbManager.logCommand(
             interaction.commandName,
             interaction.user.id,
-            interaction.guild?.id || 'DM'
+            interaction.guild?.id || "DM",
           );
 
           await (command as any).execute(interaction);
         } catch (error) {
-          console.error('Command execution error:', error);
+          console.error("Command execution error:", error);
 
-          const reply = { content: '❌ Es gab einen Fehler beim Ausführen des Befehls!', flags: 64 };
+          const reply = {
+            content: "❌ Es gab einen Fehler beim Ausführen des Befehls!",
+            flags: 64,
+          };
 
           try {
             if (interaction.replied || interaction.deferred) {
@@ -384,7 +425,7 @@ async function main() {
               await interaction.reply(reply);
             }
           } catch (replyError) {
-            console.error('Failed to send error message to user:', replyError);
+            console.error("Failed to send error message to user:", replyError);
             // Interaction ist wahrscheinlich expired - ignorieren
           }
         }
@@ -392,21 +433,33 @@ async function main() {
 
       // Handle button interactions
       if (interaction.isButton()) {
-        if (interaction.customId === 'close_ticket') {
+        if (interaction.customId === "close_ticket") {
           // Check if tickets feature is enabled for this guild
-          const isTicketFeatureEnabled = await featureManager.isFeatureEnabled(interaction.guild!.id, 'tickets');
+          const isTicketFeatureEnabled = await featureManager.isFeatureEnabled(
+            interaction.guild!.id,
+            "tickets",
+          );
           if (!isTicketFeatureEnabled) {
             await interaction.reply({
-              content: '⛔ Das Ticket-System ist für diesen Server deaktiviert.',
-              flags: 64
+              content:
+                "⛔ Das Ticket-System ist für diesen Server deaktiviert.",
+              flags: 64,
             });
             return;
           }
 
           const channel = interaction.channel;
 
-          if (!channel || !('name' in channel) || !channel.name?.startsWith('ticket-')) {
-            await interaction.reply({ content: '❌ Dieser Button kann nur in Ticket-Kanälen verwendet werden!', flags: 64 });
+          if (
+            !channel ||
+            !("name" in channel) ||
+            !channel.name?.startsWith("ticket-")
+          ) {
+            await interaction.reply({
+              content:
+                "❌ Dieser Button kann nur in Ticket-Kanälen verwendet werden!",
+              flags: 64,
+            });
             return;
           }
 
@@ -415,18 +468,26 @@ async function main() {
 
           // Find ticket in database and close it
           try {
-            const tickets = await dbManager.getTickets(interaction.guild!.id, 'open') as any[];
-            const ticket = tickets.find(t => t.channel_id === channel.id);
+            const tickets = (await dbManager.getTickets(
+              interaction.guild!.id,
+              "open",
+            )) as any[];
+            const ticket = tickets.find((t) => t.channel_id === channel.id);
 
             if (ticket) {
               // Generate transcript BEFORE closing the ticket
-              console.log(`🔄 Generating transcript for ticket ${ticket.id} in channel ${channel.name}...`);
+              console.log(
+                `🔄 Generating transcript for ticket ${ticket.id} in channel ${channel.name}...`,
+              );
               try {
                 const transcript = await generateChannelTranscript(channel);
                 await dbManager.saveTicketTranscript(ticket.id, transcript);
                 console.log(`✅ Transcript saved for ticket ${ticket.id}`);
               } catch (transcriptError) {
-                console.error('❌ Error generating/saving transcript:', transcriptError);
+                console.error(
+                  "❌ Error generating/saving transcript:",
+                  transcriptError,
+                );
                 // Continue with closing even if transcript fails
               }
 
@@ -434,68 +495,85 @@ async function main() {
               console.log(`✅ Ticket ${ticket.id} closed successfully`);
 
               // Since Discord bot can write directly to channels, we don't need external webhooks
-              console.log(`🎫 Ticket ${ticket.id} was closed by ${interaction.user.username}`);
+              console.log(
+                `🎫 Ticket ${ticket.id} was closed by ${interaction.user.username}`,
+              );
             } else {
               console.log(`⚠️ No open ticket found for channel ${channel.id}`);
             }
           } catch (error) {
-            console.error('Error closing ticket in database:', error);
+            console.error("Error closing ticket in database:", error);
           }
 
-          await interaction.editReply({ content: '🔒 Ticket wird in 5 Sekunden geschlossen...' });
+          await interaction.editReply({
+            content: "🔒 Ticket wird in 5 Sekunden geschlossen...",
+          });
 
           setTimeout(async () => {
             try {
               await channel.delete();
             } catch (error) {
-              console.error('Error deleting channel:', error);
+              console.error("Error deleting channel:", error);
             }
           }, 5000);
         }
 
         // Kategorie-Ticket Button Handler
-        if (interaction.customId?.startsWith('create_ticket_')) {
+        if (interaction.customId?.startsWith("create_ticket_")) {
           // Check if tickets feature is enabled for this guild
-          const isTicketFeatureEnabled = await featureManager.isFeatureEnabled(interaction.guild!.id, 'tickets');
+          const isTicketFeatureEnabled = await featureManager.isFeatureEnabled(
+            interaction.guild!.id,
+            "tickets",
+          );
           if (!isTicketFeatureEnabled) {
             await interaction.reply({
-              content: '⛔ Das Ticket-System ist für diesen Server deaktiviert.',
-              flags: 64
+              content:
+                "⛔ Das Ticket-System ist für diesen Server deaktiviert.",
+              flags: 64,
             });
             return;
           }
 
-          const categoryId = interaction.customId.replace('create_ticket_', '');
+          const categoryId = interaction.customId.replace("create_ticket_", "");
 
           // Import der createCategoryTicket Funktion
-          const { createCategoryTicket } = await import('./commands/ticket.js');
+          const { createCategoryTicket } = await import("./commands/ticket.js");
           await createCategoryTicket(interaction, categoryId);
         }
 
         // Legacy Button (für Rückwärtskompatibilität)
-        if (interaction.customId === 'create_ticket_button') {
+        if (interaction.customId === "create_ticket_button") {
           await interaction.reply({
-            content: 'Verwende das neue Ticket-System mit Kategorien! Führe `/ticket setup` aus.',
-            flags: 64
+            content:
+              "Verwende das neue Ticket-System mit Kategorien! Führe `/ticket setup` aus.",
+            flags: 64,
           });
         }
       }
 
       // Handle modal submissions
       if (interaction.isModalSubmit()) {
-        if (interaction.customId?.startsWith('create_ticket_modal_')) {
-          const categoryId = interaction.customId.replace('create_ticket_modal_', '');
-          const subject = interaction.fields.getTextInputValue('ticket_subject');
-          const description = interaction.fields.getTextInputValue('ticket_description');
+        if (interaction.customId?.startsWith("create_ticket_modal_")) {
+          const categoryId = interaction.customId.replace(
+            "create_ticket_modal_",
+            "",
+          );
+          const subject =
+            interaction.fields.getTextInputValue("ticket_subject");
+          const description =
+            interaction.fields.getTextInputValue("ticket_description");
 
           try {
             // Get category from database
-            const category = await dbManager.getTicketCategoryById(parseInt(categoryId), interaction.guild!.id);
-            
+            const category = await dbManager.getTicketCategoryById(
+              parseInt(categoryId),
+              interaction.guild!.id,
+            );
+
             if (!category) {
               await interaction.reply({
-                content: '❌ Kategorie nicht gefunden.',
-                flags: MessageFlags.Ephemeral
+                content: "❌ Kategorie nicht gefunden.",
+                flags: MessageFlags.Ephemeral,
               });
               return;
             }
@@ -506,21 +584,21 @@ async function main() {
             // Generate unique ticket channel name
             const timestamp = Date.now();
             const shortId = timestamp.toString().slice(-6);
-            const ticketChannelName = `ticket-${category.name.toLowerCase().replace(/[^a-z0-9]/g, '')}-${interaction.user.username.toLowerCase()}-${shortId}`;
+            const ticketChannelName = `ticket-${category.name.toLowerCase().replace(/[^a-z0-9]/g, "")}-${interaction.user.username.toLowerCase()}-${shortId}`;
 
             // Create ticket channel
             const ticketChannel = await interaction.guild!.channels.create({
               name: ticketChannelName,
               type: 0, // Text channel
-              topic: `${category.emoji || '🎫'} ${category.name} | Erstellt von ${interaction.user.tag}`,
+              topic: `${category.emoji || "🎫"} ${category.name} | Erstellt von ${interaction.user.tag}`,
               permissionOverwrites: [
                 {
                   id: interaction.guild!.roles.everyone.id,
-                  deny: ['ViewChannel'],
+                  deny: ["ViewChannel"],
                 },
                 {
                   id: interaction.user.id,
-                  allow: ['ViewChannel', 'SendMessages'],
+                  allow: ["ViewChannel", "SendMessages"],
                 },
               ],
             });
@@ -532,44 +610,57 @@ async function main() {
               reason: `${subject}: ${description}`,
               channelId: ticketChannel.id,
               guildId: interaction.guild!.id,
-              categoryId: category.id
+              categoryId: category.id,
             });
 
             // Create welcome embed with correct color parsing
             const welcomeEmbed = new EmbedBuilder()
-              .setTitle(`${category.emoji || '🎫'} ${category.name} Ticket`)
-              .setDescription(`Willkommen ${interaction.user}! Dein Ticket wurde erstellt.`)
-              .setColor(parseInt(category.color.replace('#', ''), 16) || 0x5865F2)
+              .setTitle(`${category.emoji || "🎫"} ${category.name} Ticket`)
+              .setDescription(
+                `Willkommen ${interaction.user}! Dein Ticket wurde erstellt.`,
+              )
+              .setColor(
+                parseInt(category.color.replace("#", ""), 16) || 0x5865f2,
+              )
               .addFields([
-                { name: 'Ticket ID', value: `#${ticketId}`, inline: true },
-                { name: 'Kategorie', value: category.name, inline: true },
-                { name: 'Betreff', value: subject, inline: true },
-                { name: 'Beschreibung', value: description, inline: false },
-                { name: 'Erstellt von', value: interaction.user.tag, inline: true }
+                { name: "Ticket ID", value: `#${ticketId}`, inline: true },
+                { name: "Kategorie", value: category.name, inline: true },
+                { name: "Betreff", value: subject, inline: true },
+                { name: "Beschreibung", value: description, inline: false },
+                {
+                  name: "Erstellt von",
+                  value: interaction.user.tag,
+                  inline: true,
+                },
               ])
               .setTimestamp()
-              .setFooter({ text: 'Um das Ticket zu schließen, verwende den Button unten.' });
+              .setFooter({
+                text: "Um das Ticket zu schließen, verwende den Button unten.",
+              });
 
             // Create close button
-            const closeButton = new ActionRowBuilder<ButtonBuilder>()
-              .addComponents(
+            const closeButton =
+              new ActionRowBuilder<ButtonBuilder>().addComponents(
                 new ButtonBuilder()
-                  .setCustomId('close_ticket')
-                  .setLabel('Ticket schließen')
+                  .setCustomId("close_ticket")
+                  .setLabel("Ticket schließen")
                   .setStyle(ButtonStyle.Danger)
-                  .setEmoji('🔒')
+                  .setEmoji("🔒"),
               );
 
-            await ticketChannel.send({ embeds: [welcomeEmbed], components: [closeButton] });
-
-            await interaction.editReply({
-              content: `✅ Ticket erfolgreich erstellt! <#${ticketChannel.id}>`
+            await ticketChannel.send({
+              embeds: [welcomeEmbed],
+              components: [closeButton],
             });
 
-          } catch (error) {
-            console.error('Error creating ticket from modal:', error);
             await interaction.editReply({
-              content: '❌ Fehler beim Erstellen des Tickets. Bitte versuche es erneut.'
+              content: `✅ Ticket erfolgreich erstellt! <#${ticketChannel.id}>`,
+            });
+          } catch (error) {
+            console.error("Error creating ticket from modal:", error);
+            await interaction.editReply({
+              content:
+                "❌ Fehler beim Erstellen des Tickets. Bitte versuche es erneut.",
             });
           }
         }
@@ -577,14 +668,16 @@ async function main() {
     });
 
     // Handle automatic responses
-    client.on('messageCreate', async (message) => {
+    client.on("messageCreate", async (message) => {
       if (message.author.bot || !message.guild) return;
 
       try {
         // Get auto responses from database
-        const responses = await dbManager.getAutoResponses(message.guild.id) as any[];
-        const autoResponse = responses.find(r =>
-          message.content.toLowerCase().includes(r.trigger_word.toLowerCase())
+        const responses = (await dbManager.getAutoResponses(
+          message.guild.id,
+        )) as any[];
+        const autoResponse = responses.find((r) =>
+          message.content.toLowerCase().includes(r.trigger_word.toLowerCase()),
         );
 
         if (autoResponse) {
@@ -594,10 +687,11 @@ async function main() {
               response: autoResponse.response_text,
               isEmbed: true,
               embedResponse: {
-                title: autoResponse.embed_title || 'Automatische Antwort',
-                description: autoResponse.embed_description || autoResponse.response_text,
-                color: autoResponse.embed_color || 0x00AE86
-              }
+                title: autoResponse.embed_title || "Automatische Antwort",
+                description:
+                  autoResponse.embed_description || autoResponse.response_text,
+                color: autoResponse.embed_color || 0x00ae86,
+              },
             });
 
             if (embed) {
@@ -608,20 +702,20 @@ async function main() {
           }
         }
       } catch (error) {
-        console.error('Error handling auto response:', error);
+        console.error("Error handling auto response:", error);
       }
     });
 
     // Handle process termination
-    process.on('SIGINT', () => {
-      console.log('\n🛑 Bot shutting down...');
+    process.on("SIGINT", () => {
+      console.log("\n🛑 Bot shutting down...");
       dbManager.close();
       client.destroy();
       process.exit(0);
     });
 
-    process.on('SIGTERM', () => {
-      console.log('\n🛑 Bot shutting down...');
+    process.on("SIGTERM", () => {
+      console.log("\n🛑 Bot shutting down...");
       dbManager.close();
       client.destroy();
       process.exit(0);
@@ -633,7 +727,7 @@ async function main() {
     // Login to Discord
     await client.login(TOKEN);
   } catch (error) {
-    console.error('❌ Failed to start bot:', error);
+    console.error("❌ Failed to start bot:", error);
     process.exit(1);
   }
 }

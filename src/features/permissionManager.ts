@@ -1,5 +1,5 @@
-import { PermissionFlagsBits } from 'discord.js';
-import { dbManager } from '../database/database.js';
+import { PermissionFlagsBits } from "discord.js";
+import { dbManager } from "../database/database.js";
 
 export interface UserPermissions {
   canManageTickets: boolean;
@@ -16,7 +16,7 @@ export class PermissionManager {
       canManageAutoResponses: false,
       canManageWebhooks: false,
       canViewStats: false,
-      canUseEmbedBuilder: true
+      canUseEmbedBuilder: true,
     };
   }
 
@@ -26,7 +26,7 @@ export class PermissionManager {
       canManageAutoResponses: false,
       canManageWebhooks: false,
       canViewStats: true,
-      canUseEmbedBuilder: true
+      canUseEmbedBuilder: true,
     };
   }
 
@@ -36,41 +36,62 @@ export class PermissionManager {
       canManageAutoResponses: true,
       canManageWebhooks: true,
       canViewStats: true,
-      canUseEmbedBuilder: true
+      canUseEmbedBuilder: true,
     };
   }
 
   // Save user permissions to database
-  static async setUserPermissions(userId: string, guildId: string, role: string, permissions: UserPermissions) {
+  static async setUserPermissions(
+    userId: string,
+    guildId: string,
+    role: string,
+    permissions: UserPermissions,
+  ) {
     try {
       // Convert UserPermissions object to string array
-      const permissionArray = Object.keys(permissions).filter(key => permissions[key as keyof UserPermissions]);
-      await dbManager.setUserPermissions(userId, guildId, role, permissionArray);
+      const permissionArray = Object.keys(permissions).filter(
+        (key) => permissions[key as keyof UserPermissions],
+      );
+      await dbManager.setUserPermissions(
+        userId,
+        guildId,
+        role,
+        permissionArray,
+      );
       return true;
     } catch (error) {
-      console.error('Error setting user permissions:', error);
+      console.error("Error setting user permissions:", error);
       return false;
     }
   }
 
   // Get user permissions from database
-  static async getUserPermissionsFromDB(userId: string, guildId: string): Promise<UserPermissions | null> {
+  static async getUserPermissionsFromDB(
+    userId: string,
+    guildId: string,
+  ): Promise<UserPermissions | null> {
     try {
-      const userPerm = await dbManager.getUserPermissions(userId, guildId) as any;
+      const userPerm = (await dbManager.getUserPermissions(
+        userId,
+        guildId,
+      )) as any;
       if (userPerm && userPerm.permissions) {
         return JSON.parse(userPerm.permissions);
       }
       return null;
     } catch (error) {
-      console.error('Error getting user permissions:', error);
+      console.error("Error getting user permissions:", error);
       return null;
     }
   }
 
-  static async hasPermission(interaction: any, requiredPermission: keyof UserPermissions): Promise<boolean> {
+  static async hasPermission(
+    interaction: any,
+    requiredPermission: keyof UserPermissions,
+  ): Promise<boolean> {
     const member = interaction.member;
     const userId = member.id || member.user?.id;
-    
+
     // Check if user is a global admin first
     if (userId) {
       const globalAdminCheck = await dbManager.isGlobalAdmin(userId);
@@ -90,7 +111,10 @@ export class PermissionManager {
     }
 
     // Check database permissions first
-    const dbPermissions = await this.getUserPermissionsFromDB(userId, interaction.guild.id);
+    const dbPermissions = await this.getUserPermissionsFromDB(
+      userId,
+      interaction.guild.id,
+    );
     if (dbPermissions) {
       return dbPermissions[requiredPermission];
     }
@@ -102,7 +126,7 @@ export class PermissionManager {
 
   static async getUserPermissions(member: any): Promise<UserPermissions> {
     const userId = member.id || member.user?.id;
-    
+
     // Check if user is a global admin first
     if (userId) {
       const globalAdminCheck = await dbManager.isGlobalAdmin(userId);
@@ -117,8 +141,10 @@ export class PermissionManager {
     }
 
     // Moderator (has ManageMessages or ManageChannels)
-    if (member.permissions.has(PermissionFlagsBits.ManageMessages) || 
-        member.permissions.has(PermissionFlagsBits.ManageChannels)) {
+    if (
+      member.permissions.has(PermissionFlagsBits.ManageMessages) ||
+      member.permissions.has(PermissionFlagsBits.ManageChannels)
+    ) {
       return this.getModeratorPermissions();
     }
 
@@ -134,8 +160,10 @@ export class PermissionManager {
     }
 
     // Moderator (has ManageMessages or ManageChannels)
-    if (member.permissions.has(PermissionFlagsBits.ManageMessages) || 
-        member.permissions.has(PermissionFlagsBits.ManageChannels)) {
+    if (
+      member.permissions.has(PermissionFlagsBits.ManageMessages) ||
+      member.permissions.has(PermissionFlagsBits.ManageChannels)
+    ) {
       return this.getModeratorPermissions();
     }
 
@@ -144,35 +172,40 @@ export class PermissionManager {
   }
 
   // Check if a user is a global admin
-  static async isGlobalAdmin(userId: string): Promise<{ isAdmin: boolean; level: number }> {
+  static async isGlobalAdmin(
+    userId: string,
+  ): Promise<{ isAdmin: boolean; level: number }> {
     try {
       return await dbManager.isGlobalAdmin(userId);
     } catch (error) {
-      console.error('Error checking global admin status:', error);
+      console.error("Error checking global admin status:", error);
       return { isAdmin: false, level: 0 };
     }
   }
 
-  static async checkCommandPermission(interaction: any, commandName: string): Promise<boolean> {
+  static async checkCommandPermission(
+    interaction: any,
+    commandName: string,
+  ): Promise<boolean> {
     switch (commandName) {
-      case 'ticket':
+      case "ticket":
         const subcommand = interaction.options.getSubcommand();
-        if (subcommand === 'create') {
+        if (subcommand === "create") {
           return true; // Everyone can create tickets
         }
-        return await this.hasPermission(interaction, 'canManageTickets');
+        return await this.hasPermission(interaction, "canManageTickets");
 
-      case 'autoresponse':
-        return await this.hasPermission(interaction, 'canManageAutoResponses');
+      case "autoresponse":
+        return await this.hasPermission(interaction, "canManageAutoResponses");
 
-      case 'webhook':
-        return await this.hasPermission(interaction, 'canManageWebhooks');
+      case "webhook":
+        return await this.hasPermission(interaction, "canManageWebhooks");
 
-      case 'stats':
-        return await this.hasPermission(interaction, 'canViewStats');
+      case "stats":
+        return await this.hasPermission(interaction, "canViewStats");
 
-      case 'embed':
-        return await this.hasPermission(interaction, 'canUseEmbedBuilder');
+      case "embed":
+        return await this.hasPermission(interaction, "canUseEmbedBuilder");
 
       default:
         return true;

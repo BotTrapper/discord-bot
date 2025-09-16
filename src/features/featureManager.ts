@@ -1,6 +1,6 @@
-import { dbManager } from '../database/database.js';
+import { dbManager } from "../database/database.js";
 
-export type FeatureName = 'tickets' | 'autoresponses' | 'statistics';
+export type FeatureName = "tickets" | "autoresponses" | "statistics";
 
 export class FeatureManager {
   private static instance: FeatureManager;
@@ -18,7 +18,10 @@ export class FeatureManager {
   /**
    * Check if a feature is enabled for a specific guild
    */
-  async isFeatureEnabled(guildId: string, feature: FeatureName): Promise<boolean> {
+  async isFeatureEnabled(
+    guildId: string,
+    feature: FeatureName,
+  ): Promise<boolean> {
     try {
       // Check cache first
       const cached = this.getCachedFeatures(guildId);
@@ -34,7 +37,10 @@ export class FeatureManager {
 
       return enabledFeatures.includes(feature);
     } catch (error) {
-      console.error(`Error checking feature ${feature} for guild ${guildId}:`, error);
+      console.error(
+        `Error checking feature ${feature} for guild ${guildId}:`,
+        error,
+      );
       // Default to enabled on error to prevent breaking functionality
       return true;
     }
@@ -43,7 +49,11 @@ export class FeatureManager {
   /**
    * Enable or disable a feature for a guild
    */
-  async setFeatureEnabled(guildId: string, feature: FeatureName, enabled: boolean): Promise<void> {
+  async setFeatureEnabled(
+    guildId: string,
+    feature: FeatureName,
+    enabled: boolean,
+  ): Promise<void> {
     try {
       const settings: any = await dbManager.getGuildSettings(guildId);
       let enabledFeatures = settings.enabledFeatures || [];
@@ -54,14 +64,23 @@ export class FeatureManager {
         enabledFeatures = enabledFeatures.filter((f: string) => f !== feature);
       }
 
-      await dbManager.updateGuildSettings(guildId, enabledFeatures, settings.settings);
+      await dbManager.updateGuildSettings(
+        guildId,
+        enabledFeatures,
+        settings.settings,
+      );
 
       // Update cache
       this.setCachedFeatures(guildId, enabledFeatures);
 
-      console.log(`Feature ${feature} ${enabled ? 'enabled' : 'disabled'} for guild ${guildId}`);
+      console.log(
+        `Feature ${feature} ${enabled ? "enabled" : "disabled"} for guild ${guildId}`,
+      );
     } catch (error) {
-      console.error(`Error setting feature ${feature} for guild ${guildId}:`, error);
+      console.error(
+        `Error setting feature ${feature} for guild ${guildId}:`,
+        error,
+      );
       throw error;
     }
   }
@@ -83,16 +102,22 @@ export class FeatureManager {
 
       return enabledFeatures as FeatureName[];
     } catch (error) {
-      console.error(`Error getting enabled features for guild ${guildId}:`, error);
+      console.error(
+        `Error getting enabled features for guild ${guildId}:`,
+        error,
+      );
       // Return default features on error
-      return ['tickets', 'autoresponses', 'statistics'];
+      return ["tickets", "autoresponses", "statistics"];
     }
   }
 
   /**
    * Update multiple features at once
    */
-  async updateFeatures(guildId: string, features: Partial<Record<FeatureName, boolean>>): Promise<void> {
+  async updateFeatures(
+    guildId: string,
+    features: Partial<Record<FeatureName, boolean>>,
+  ): Promise<void> {
     try {
       const currentFeatures = await this.getEnabledFeatures(guildId);
       let newFeatures = [...currentFeatures];
@@ -102,12 +127,16 @@ export class FeatureManager {
         if (enabled && !newFeatures.includes(featureName)) {
           newFeatures.push(featureName);
         } else if (!enabled && newFeatures.includes(featureName)) {
-          newFeatures = newFeatures.filter(f => f !== featureName);
+          newFeatures = newFeatures.filter((f) => f !== featureName);
         }
       }
 
       const settings: any = await dbManager.getGuildSettings(guildId);
-      await dbManager.updateGuildSettings(guildId, newFeatures, settings.settings);
+      await dbManager.updateGuildSettings(
+        guildId,
+        newFeatures,
+        settings.settings,
+      );
 
       // Update cache
       this.setCachedFeatures(guildId, newFeatures);
