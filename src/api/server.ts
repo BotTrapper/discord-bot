@@ -540,11 +540,9 @@ const requireGuildAccess = async (
     console.log(
       `❌ User ${user.username || user.id} has no MANAGE_SERVER permission for guild ${guildId}`,
     );
-    return res
-      .status(403)
-      .json({
-        error: "No access to this guild - MANAGE_SERVER permission required",
-      });
+    return res.status(403).json({
+      error: "No access to this guild - MANAGE_SERVER permission required",
+    });
   }
 
   console.log(
@@ -1705,11 +1703,9 @@ app.post(
       }
 
       if (!trigger || (!response && !embedDescription)) {
-        return res
-          .status(400)
-          .json({
-            error: "Trigger and response/embedDescription are required",
-          });
+        return res.status(400).json({
+          error: "Trigger and response/embedDescription are required",
+        });
       }
 
       const autoResponseId = await dbManager.addAutoResponse({
