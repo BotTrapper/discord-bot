@@ -15,6 +15,7 @@ import { dbManager } from '../database/database.js';
 import { featureManager, type FeatureName } from '../features/featureManager.js';
 import { versionManager } from '../utils/version.js';
 import type {Client, Snowflake} from 'discord.js';
+import crypto from 'crypto';
 
 // Type definitions for untyped modules
 interface DiscordProfile {
@@ -71,6 +72,77 @@ const requestLogger = (req: Request, res: Response, next: NextFunction) => {
 
   next();
 };
+
+// Admin Session Management
+interface AdminSession {
+  userId: string;
+  guildId: string;
+  adminLevel: number;
+  createdAt: number;
+  expiresAt: number;
+}
+
+const adminSessions = new Map<string, AdminSession>();
+
+// Generate Admin Session Token
+const generateAdminSessionToken = (userId: string, guildId: string, adminLevel: number): string => {
+  const sessionId = crypto.randomBytes(32).toString('hex');
+  const expiresAt = Date.now() + (24 * 60 * 60 * 1000); // 24 hours
+  
+  const session: AdminSession = {
+    userId,
+    guildId,
+    adminLevel,
+    createdAt: Date.now(),
+    expiresAt
+  };
+  
+  adminSessions.set(sessionId, session);
+  console.log(`🔑 Created admin session token for user ${userId} on guild ${guildId} (Level ${adminLevel})`);
+  
+  return sessionId;
+};
+
+// Validate Admin Session Token
+const validateAdminSession = (token: string, guildId?: string): AdminSession | null => {
+  const session = adminSessions.get(token);
+  
+  if (!session) {
+    return null;
+  }
+  
+  // Check expiry
+  if (Date.now() > session.expiresAt) {
+    adminSessions.delete(token);
+    console.log(`⏰ Admin session token expired for user ${session.userId}`);
+    return null;
+  }
+  
+  // Check guild match if provided
+  if (guildId && session.guildId !== guildId) {
+    console.log(`❌ Admin session guild mismatch: expected ${guildId}, got ${session.guildId}`);
+    return null;
+  }
+  
+  return session;
+};
+
+// Clean up expired sessions periodically
+setInterval(() => {
+  const now = Date.now();
+  let cleaned = 0;
+  
+  for (const [token, session] of adminSessions.entries()) {
+    if (now > session.expiresAt) {
+      adminSessions.delete(token);
+      cleaned++;
+    }
+  }
+  
+  if (cleaned > 0) {
+    console.log(`🧹 Cleaned up ${cleaned} expired admin sessions`);
+  }
+}, 60 * 60 * 1000); // Clean every hour
 
 const app = express();
 const PORT = process.env.API_PORT || 3001;
@@ -343,6 +415,24 @@ const requireGuildAccess = async (req: Request, res: Response, next: NextFunctio
   const { guildId } = req.params;
   const user = req.user as CustomUser;
   
+  // Check for admin session token first
+  const adminSessionToken = req.headers['x-admin-session'] as string;
+  if (adminSessionToken) {
+    const adminSession = validateAdminSession(adminSessionToken, guildId);
+    if (adminSession) {
+      console.log(`🔑 Valid admin session token for user ${adminSession.userId} on guild ${guildId} (Level ${adminSession.adminLevel})`);
+      (req.user as any) = { 
+        ...user, 
+        id: adminSession.userId,
+        isGlobalAdmin: true, 
+        adminLevel: adminSession.adminLevel 
+      };
+      return next();
+    } else {
+      console.log(`❌ Invalid or expired admin session token for guild ${guildId}`);
+    }
+  }
+  
   if (!user) {
     return res.status(403).json({ error: 'No user found' });
   }
@@ -413,6 +503,58 @@ app.get('/api/admin/status', requireAuth, async (req: Request, res: Response) =>
   console.log('🔍 Admin status result:', adminStatus);
   
   return res.json(adminStatus);
+});
+
+// Generate admin session token for guild access
+app.post('/api/admin/session/:guildId', requireAuth, requireGlobalAdmin, async (req: Request, res: Response) => {
+  const { guildId } = req.params;
+  const user = req.user as CustomUser;
+  const adminLevel = (user as any).adminLevel || 3; // Default to level 3
+  
+  try {
+    if (!guildId) {
+      return res.status(400).json({ error: 'Guild ID is required' });
+    }
+    
+    const sessionToken = generateAdminSessionToken(user.id, guildId, adminLevel);
+    
+    console.log(`🔑 Generated admin session token for ${user.username} (${user.id}) on guild ${guildId}`);
+    
+    return res.json({
+      sessionToken,
+      guildId,
+      adminLevel,
+      expiresAt: Date.now() + (24 * 60 * 60 * 1000)
+    });
+  } catch (error) {
+    console.error('Generate admin session error:', error);
+    return res.status(500).json({ error: 'Failed to generate admin session' });
+  }
+});
+
+// Validate admin session token
+app.get('/api/admin/session/validate/:guildId', async (req: Request, res: Response): Promise<void> => {
+  const { guildId } = req.params;
+  const adminSessionToken = req.headers['x-admin-session'] as string;
+  
+  if (!adminSessionToken) {
+    res.status(400).json({ error: 'No admin session token provided' });
+    return;
+  }
+  
+  const session = validateAdminSession(adminSessionToken, guildId);
+  if (!session) {
+    res.status(401).json({ error: 'Invalid or expired admin session' });
+    return;
+  }
+  
+  res.json({
+    valid: true,
+    userId: session.userId,
+    guildId: session.guildId,
+    adminLevel: session.adminLevel,
+    expiresAt: session.expiresAt
+  });
 });
 
 app.get('/api/admin/settings', requireAuth, requireGlobalAdmin, async (req: Request, res: Response) => {
