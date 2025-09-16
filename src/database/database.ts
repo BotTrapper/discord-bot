@@ -2,6 +2,11 @@ import { Pool, PoolClient } from "pg";
 
 export class DatabaseManager {
   private pool: Pool;
+  private adminCache = new Map<
+    string,
+    { isAdmin: boolean; level: number; timestamp: number }
+  >();
+  private readonly CACHE_TTL = 5 * 60 * 1000; // 5 minutes cache
 
   // Getter for the connection pool (needed for session store)
   get connectionPool(): Pool {
@@ -21,11 +26,12 @@ export class DatabaseManager {
         process.env.NODE_ENV === "production" && process.env.DB_SSL === "true"
           ? { rejectUnauthorized: false }
           : false,
-      max: 10, // Maximum number of clients in the pool
-      idleTimeoutMillis: 30000, // How long a client is allowed to remain idle
-      connectionTimeoutMillis: 10000, // How long to wait when connecting a client (10 seconds)
-      statement_timeout: 30000, // How long to wait for a query to complete (30 seconds)
-      query_timeout: 30000, // Query timeout
+      max: 20, // Increased connection pool size
+      min: 2, // Keep minimum connections open
+      idleTimeoutMillis: 10000, // Reduced idle timeout
+      connectionTimeoutMillis: 2000, // Reduced connection timeout (2 seconds)
+      statement_timeout: 5000, // Reduced query timeout (5 seconds)
+      query_timeout: 5000, // Reduced query timeout (5 seconds)
       application_name: "BotTrapper-Discord-Bot",
     });
 
@@ -40,9 +46,12 @@ export class DatabaseManager {
       }
     });
 
-    this.pool.on("acquire", () => {
-      console.log("🔗 PostgreSQL client acquired from pool");
-    });
+    // Remove excessive logging for production performance
+    if (process.env.NODE_ENV !== "production") {
+      this.pool.on("acquire", () => {
+        console.log("🔗 PostgreSQL client acquired from pool");
+      });
+    }
 
     // Test the connection immediately
     this.testConnection();
@@ -912,6 +921,9 @@ export class DatabaseManager {
          RETURNING id`,
         [userId, username, level, grantedBy],
       );
+
+      // Clear cache for this user since their admin status changed
+      this.clearAdminCache(userId);
       return result.rows[0].id;
     } finally {
       client.release();
@@ -925,6 +937,9 @@ export class DatabaseManager {
         `UPDATE global_admins SET is_active = false WHERE user_id = $1`,
         [userId],
       );
+
+      // Clear cache for this user since their admin status changed
+      this.clearAdminCache(userId);
       return result.rowCount || 0;
     } finally {
       client.release();
@@ -934,33 +949,47 @@ export class DatabaseManager {
   async isGlobalAdmin(
     userId: string,
   ): Promise<{ isAdmin: boolean; level: number }> {
+    // Check cache first
+    const cached = this.adminCache.get(userId);
+    if (cached && Date.now() - cached.timestamp < this.CACHE_TTL) {
+      return { isAdmin: cached.isAdmin, level: cached.level };
+    }
+
     const client = await this.pool.connect();
     try {
-      console.log("🔍 Checking global admin status for userId:", userId);
-
-      // Debug: Show all global admins
-      const allAdminsResult = await client.query(
-        `SELECT user_id, username, level, is_active FROM global_admins`,
-      );
-      console.log("🔍 All global admins in database:", allAdminsResult.rows);
+      // Only log in development
+      if (process.env.NODE_ENV !== "production") {
+        console.log("🔍 Checking global admin status for userId:", userId);
+      }
 
       const result = await client.query(
         `SELECT level FROM global_admins WHERE user_id = $1 AND is_active = true`,
         [userId],
       );
 
-      console.log("🔍 Global admin query result:", {
-        rowCount: result.rowCount,
-        rows: result.rows,
-        searchedUserId: userId,
+      const adminInfo =
+        result.rows.length > 0
+          ? { isAdmin: true, level: result.rows[0].level }
+          : { isAdmin: false, level: 0 };
+
+      // Cache the result
+      this.adminCache.set(userId, {
+        ...adminInfo,
+        timestamp: Date.now(),
       });
 
-      if (result.rows.length > 0) {
-        return { isAdmin: true, level: result.rows[0].level };
-      }
-      return { isAdmin: false, level: 0 };
+      return adminInfo;
     } finally {
       client.release();
+    }
+  }
+
+  // Method to clear admin cache (call when admin status changes)
+  clearAdminCache(userId?: string): void {
+    if (userId) {
+      this.adminCache.delete(userId);
+    } else {
+      this.adminCache.clear();
     }
   }
 

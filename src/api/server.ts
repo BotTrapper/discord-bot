@@ -45,8 +45,10 @@ const requestLogger = (req: Request, res: Response, next: NextFunction) => {
   const startTime = Date.now();
   const timestamp = new Date().toISOString();
 
-  // Log request start
-  console.log(`[${timestamp}] ${req.method} ${req.url} - Request started`);
+  // Only log in development
+  if (process.env.NODE_ENV !== "production") {
+    console.log(`[${timestamp}] ${req.method} ${req.url} - Request started`);
+  }
 
   // Override res.json and res.send to log response
   const originalJson = res.json;
@@ -54,21 +56,25 @@ const requestLogger = (req: Request, res: Response, next: NextFunction) => {
 
   res.json = function (body: any) {
     const duration = Date.now() - startTime;
-    console.log(
-      `[${new Date().toISOString()}] ${req.method} ${req.url} - ${res.statusCode} - ${duration}ms`,
-    );
+    if (process.env.NODE_ENV !== "production") {
+      console.log(
+        `[${new Date().toISOString()}] ${req.method} ${req.url} - ${res.statusCode} - ${duration}ms`,
+      );
+    }
     return originalJson.call(this, body);
   };
 
   res.send = function (body: any) {
     const duration = Date.now() - startTime;
-    console.log(
-      `[${new Date().toISOString()}] ${req.method} ${req.url} - ${res.statusCode} - ${duration}ms`,
-    );
+    if (process.env.NODE_ENV !== "production") {
+      console.log(
+        `[${new Date().toISOString()}] ${req.method} ${req.url} - ${res.statusCode} - ${duration}ms`,
+      );
+    }
     return originalSend.call(this, body);
   };
 
-  // Log if request takes too long
+  // Log if request takes too long (keep this in production for debugging)
   const timeoutWarning = setTimeout(() => {
     console.warn(
       `[WARNING] ${req.method} ${req.url} - Request taking longer than 5 seconds`,
@@ -132,15 +138,19 @@ const validateAdminSession = (
   // Check expiry
   if (Date.now() > session.expiresAt) {
     adminSessions.delete(token);
-    console.log(`⏰ Admin session token expired for user ${session.userId}`);
+    if (process.env.NODE_ENV !== "production") {
+      console.log(`⏰ Admin session token expired for user ${session.userId}`);
+    }
     return null;
   }
 
   // Check guild match if provided
   if (guildId && session.guildId !== guildId) {
-    console.log(
-      `❌ Admin session guild mismatch: expected ${guildId}, got ${session.guildId}`,
-    );
+    if (process.env.NODE_ENV !== "production") {
+      console.log(
+        `❌ Admin session guild mismatch: expected ${guildId}, got ${session.guildId}`,
+      );
+    }
     return null;
   }
 
@@ -160,7 +170,7 @@ setInterval(
       }
     }
 
-    if (cleaned > 0) {
+    if (cleaned > 0 && process.env.NODE_ENV !== "production") {
       console.log(`🧹 Cleaned up ${cleaned} expired admin sessions`);
     }
   },
@@ -203,7 +213,12 @@ app.use(
     },
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "x-admin-session"],
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "X-Requested-With",
+      "x-admin-session",
+    ],
     optionsSuccessStatus: 200,
   }),
 );
@@ -233,13 +248,15 @@ app.use(
 app.use(passport.initialize());
 app.use(passport.session());
 
-// Debug middleware for CORS issues
-app.use((req: Request, res: Response, next: NextFunction) => {
-  console.log(`[CORS DEBUG] ${req.method} ${req.url}`);
-  console.log(`[CORS DEBUG] Origin: ${req.headers.origin}`);
-  console.log(`[CORS DEBUG] Headers:`, JSON.stringify(req.headers, null, 2));
-  next();
-});
+// Debug middleware for CORS issues (development only)
+if (process.env.NODE_ENV !== "production") {
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    console.log(`[CORS DEBUG] ${req.method} ${req.url}`);
+    console.log(`[CORS DEBUG] Origin: ${req.headers.origin}`);
+    console.log(`[CORS DEBUG] Headers:`, JSON.stringify(req.headers, null, 2));
+    next();
+  });
+}
 
 app.use(requestLogger);
 
@@ -348,10 +365,14 @@ const refreshDiscordToken = async (
       };
     }
 
-    console.log(`❌ Token refresh failed with status: ${response.status}`);
+    if (process.env.NODE_ENV !== "production") {
+      console.log(`❌ Token refresh failed with status: ${response.status}`);
+    }
     return null;
   } catch (error) {
-    console.error("❌ Error refreshing token:", error);
+    if (process.env.NODE_ENV !== "production") {
+      console.error("❌ Error refreshing token:", error);
+    }
     return null;
   }
 };
@@ -393,7 +414,9 @@ const requireAuth = async (req: Request, res: Response, next: NextFunction) => {
 
           // If access token is expired (401), try to refresh it
           if (userResponse.status === 401 && refreshToken) {
-            console.log("🔄 Access token expired, attempting refresh...");
+            if (process.env.NODE_ENV !== "production") {
+              console.log("🔄 Access token expired, attempting refresh...");
+            }
             const refreshResult = await refreshDiscordToken(refreshToken);
 
             if (refreshResult) {
@@ -408,7 +431,9 @@ const requireAuth = async (req: Request, res: Response, next: NextFunction) => {
                 expiresAt,
               );
 
-              console.log("✅ Token refreshed successfully");
+              if (process.env.NODE_ENV !== "production") {
+                console.log("✅ Token refreshed successfully");
+              }
 
               // Retry the API calls with new token
               userResponse = await fetch("https://discord.com/api/users/@me", {
@@ -435,17 +460,23 @@ const requireAuth = async (req: Request, res: Response, next: NextFunction) => {
             // Try to get guilds, but don't fail if rate limited
             if (guildsResponse.ok) {
               guildsData = await guildsResponse.json();
-              console.log(
-                `✅ JWT authenticated user with guilds: ${userData.username}#${userData.discriminator}`,
-              );
+              if (process.env.NODE_ENV !== "production") {
+                console.log(
+                  `✅ JWT authenticated user with guilds: ${userData.username}#${userData.discriminator}`,
+                );
+              }
             } else if (guildsResponse.status === 429) {
-              console.log(
-                `⚠️ Guild data rate limited (429), continuing with user data only: ${userData.username}#${userData.discriminator}`,
-              );
+              if (process.env.NODE_ENV !== "production") {
+                console.log(
+                  `⚠️ Guild data rate limited (429), continuing with user data only: ${userData.username}#${userData.discriminator}`,
+                );
+              }
             } else {
-              console.log(
-                `⚠️ Guild data unavailable (${guildsResponse.status}), continuing with user data only: ${userData.username}#${userData.discriminator}`,
-              );
+              if (process.env.NODE_ENV !== "production") {
+                console.log(
+                  `⚠️ Guild data unavailable (${guildsResponse.status}), continuing with user data only: ${userData.username}#${userData.discriminator}`,
+                );
+              }
             }
 
             req.user = {
@@ -460,14 +491,18 @@ const requireAuth = async (req: Request, res: Response, next: NextFunction) => {
 
             return next();
           } else {
-            console.log(
-              `❌ Failed to fetch user data from Discord API - User: ${userResponse.status}, Guilds: ${guildsResponse.status}`,
-            );
+            if (process.env.NODE_ENV !== "production") {
+              console.log(
+                `❌ Failed to fetch user data from Discord API - User: ${userResponse.status}, Guilds: ${guildsResponse.status}`,
+              );
+            }
             // If user data failed, remove token from database
             await dbManager.removeUserToken(decoded.userId);
           }
         } catch (discordError) {
-          console.error("❌ Discord API error:", discordError);
+          if (process.env.NODE_ENV !== "production") {
+            console.error("❌ Discord API error:", discordError);
+          }
           // On Discord API error, try to continue with minimal user data
           req.user = {
             id: decoded.userId,
@@ -475,10 +510,14 @@ const requireAuth = async (req: Request, res: Response, next: NextFunction) => {
           return next();
         }
       } else {
-        console.log("❌ Token not found in database or expired");
+        if (process.env.NODE_ENV !== "production") {
+          console.log("❌ Token not found in database or expired");
+        }
       }
     } catch (error) {
-      console.error("❌ JWT verification failed:", error);
+      if (process.env.NODE_ENV !== "production") {
+        console.error("❌ JWT verification failed:", error);
+      }
     }
   }
 
@@ -499,9 +538,11 @@ const requireGuildAccess = async (
   if (adminSessionToken) {
     const adminSession = validateAdminSession(adminSessionToken, guildId);
     if (adminSession) {
-      console.log(
-        `🔑 Valid admin session token for user ${adminSession.userId} on guild ${guildId} (Level ${adminSession.adminLevel})`,
-      );
+      if (process.env.NODE_ENV !== "production") {
+        console.log(
+          `🔑 Valid admin session token for user ${adminSession.userId} on guild ${guildId} (Level ${adminSession.adminLevel})`,
+        );
+      }
       (req.user as any) = {
         ...user,
         id: adminSession.userId,
@@ -510,9 +551,11 @@ const requireGuildAccess = async (
       };
       return next();
     } else {
-      console.log(
-        `❌ Invalid or expired admin session token for guild ${guildId}`,
-      );
+      if (process.env.NODE_ENV !== "production") {
+        console.log(
+          `❌ Invalid or expired admin session token for guild ${guildId}`,
+        );
+      }
     }
   }
 
