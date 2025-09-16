@@ -244,15 +244,22 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 app.use(requestLogger);
 
 // Discord OAuth Strategy
-// @ts-ignore - Passport Discord types are inconsistent
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore
 passport.use(
+  // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+  // @ts-ignore
   new DiscordStrategy(
+    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+    // @ts-ignore
     {
       clientID: process.env.CLIENT_ID || "",
       clientSecret: CLIENT_SECRET,
       callbackURL: `${process.env.API_BASE_URL || "http://localhost:3001"}/auth/discord/callback`,
       scope: ["identify", "guilds"],
     },
+    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+    // @ts-ignore
     (
       accessToken: string,
       refreshToken: string,
@@ -1434,10 +1441,9 @@ app.get(
             `[DEBUG] Successfully fetched members. Now have: ${guild.members.cache.size}`,
           );
         } catch (fetchError) {
-          // @ts-ignore
           console.warn(
             "[DEBUG] Could not fetch members:",
-            fetchError.message || fetchError,
+            fetchError instanceof Error ? fetchError.message : String(fetchError),
           );
           // Continue with whatever we have in cache
         }
