@@ -78,19 +78,39 @@ const PORT = process.env.API_PORT || 3001;
 // Environment variables
 const CLIENT_SECRET = process.env.DISCORD_CLIENT_SECRET || '';
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
-const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
+const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:3000';
 
 // Create PostgreSQL session store
 const PgSession = connectPgSimple(session);
 
 // Middleware
 app.use(cors({
-  origin: [
-    FRONTEND_URL,
-    'https://bottrapper.github.io'
-  ],
-  credentials: true
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+    
+    const allowedOrigins = [
+      'http://localhost:3000',
+      'http://localhost:5173',
+      process.env.FRONTEND_URL || 'http://localhost:3000',
+      'https://bottrapper.github.io',
+      'https://bottrapper.me',
+      'https://dashboard.bottrapper.me'
+    ];
+    
+    if (allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      console.log(`[CORS] Blocked origin: ${origin}`);
+      callback(null, false);
+    }
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  optionsSuccessStatus: 200
 }));
+
 app.use(express.json());
 
 // Configure session with PostgreSQL store
@@ -113,6 +133,15 @@ app.use(session({
 
 app.use(passport.initialize());
 app.use(passport.session());
+
+// Debug middleware for CORS issues
+app.use((req: Request, res: Response, next: NextFunction) => {
+  console.log(`[CORS DEBUG] ${req.method} ${req.url}`);
+  console.log(`[CORS DEBUG] Origin: ${req.headers.origin}`);
+  console.log(`[CORS DEBUG] Headers:`, JSON.stringify(req.headers, null, 2));
+  next();
+});
+
 app.use(requestLogger);
 
 // Discord OAuth Strategy

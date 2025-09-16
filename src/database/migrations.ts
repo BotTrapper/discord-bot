@@ -10,11 +10,58 @@ export async function initializeDatabase() {
     // Database tables are automatically created in DatabaseManager constructor
     console.log('✅ Database tables initialized');
     
-    // Add any future migration logic here
+    // Run migrations
+    await runMigrations();
     
     console.log('✅ Database initialization complete');
   } catch (error) {
     console.error('❌ Database initialization failed:', error);
+    throw error;
+  }
+}
+
+/**
+ * Run database migrations
+ */
+async function runMigrations() {
+  console.log('🔧 Running database migrations...');
+  
+  try {
+    // Migration: Add default global admin (justusplays78)
+    await addDefaultGlobalAdmin();
+    
+    console.log('✅ All migrations completed');
+  } catch (error) {
+    console.error('❌ Migration failed:', error);
+    throw error;
+  }
+}
+
+/**
+ * Migration: Add default global admin user
+ */
+async function addDefaultGlobalAdmin() {
+  const defaultAdminId = '281491350632005633';
+  const defaultAdminUsername = 'justusplays78';
+  
+  try {
+    // Check if the default admin already exists
+    const existingAdmin = await dbManager.isGlobalAdmin(defaultAdminId);
+    
+    if (!existingAdmin.isAdmin) {
+      // Add the default admin with level 3 (highest level)
+      await dbManager.addGlobalAdmin(
+        defaultAdminId, 
+        defaultAdminUsername, 
+        3, 
+        'SYSTEM_MIGRATION'
+      );
+      console.log(`✅ Default global admin ${defaultAdminUsername} (${defaultAdminId}) added successfully`);
+    } else {
+      console.log(`ℹ️  Default global admin ${defaultAdminUsername} already exists with level ${existingAdmin.level}`);
+    }
+  } catch (error) {
+    console.error('❌ Failed to add default global admin:', error);
     throw error;
   }
 }

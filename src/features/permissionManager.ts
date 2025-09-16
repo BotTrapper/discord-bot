@@ -69,9 +69,18 @@ export class PermissionManager {
 
   static async hasPermission(interaction: any, requiredPermission: keyof UserPermissions): Promise<boolean> {
     const member = interaction.member;
+    const userId = member.id || member.user?.id;
     
+    // Check if user is a global admin first
+    if (userId) {
+      const globalAdminCheck = await dbManager.isGlobalAdmin(userId);
+      if (globalAdminCheck.isAdmin) {
+        return true; // Global admins have all permissions
+      }
+    }
+
     // Bot owner always has all permissions
-    if (member.id === interaction.client.application.owner?.id) {
+    if (userId === interaction.client.application.owner?.id) {
       return true;
     }
 
@@ -81,17 +90,27 @@ export class PermissionManager {
     }
 
     // Check database permissions first
-    const dbPermissions = await this.getUserPermissionsFromDB(member.id, interaction.guild.id);
+    const dbPermissions = await this.getUserPermissionsFromDB(userId, interaction.guild.id);
     if (dbPermissions) {
       return dbPermissions[requiredPermission];
     }
 
     // Fall back to role-based permissions
-    const permissions = this.getUserPermissions(member);
+    const permissions = await this.getUserPermissions(member);
     return permissions[requiredPermission];
   }
 
-  static getUserPermissions(member: any): UserPermissions {
+  static async getUserPermissions(member: any): Promise<UserPermissions> {
+    const userId = member.id || member.user?.id;
+    
+    // Check if user is a global admin first
+    if (userId) {
+      const globalAdminCheck = await dbManager.isGlobalAdmin(userId);
+      if (globalAdminCheck.isAdmin) {
+        return this.getAdminPermissions(); // Global admins get admin permissions
+      }
+    }
+
     // Administrator
     if (member.permissions.has(PermissionFlagsBits.Administrator)) {
       return this.getAdminPermissions();
@@ -105,6 +124,33 @@ export class PermissionManager {
 
     // Default user
     return this.getDefaultPermissions();
+  }
+
+  // Synchronous version for backward compatibility
+  static getUserPermissionsSync(member: any): UserPermissions {
+    // Administrator
+    if (member.permissions.has(PermissionFlagsBits.Administrator)) {
+      return this.getAdminPermissions();
+    }
+
+    // Moderator (has ManageMessages or ManageChannels)
+    if (member.permissions.has(PermissionFlagsBits.ManageMessages) || 
+        member.permissions.has(PermissionFlagsBits.ManageChannels)) {
+      return this.getModeratorPermissions();
+    }
+
+    // Default user
+    return this.getDefaultPermissions();
+  }
+
+  // Check if a user is a global admin
+  static async isGlobalAdmin(userId: string): Promise<{ isAdmin: boolean; level: number }> {
+    try {
+      return await dbManager.isGlobalAdmin(userId);
+    } catch (error) {
+      console.error('Error checking global admin status:', error);
+      return { isAdmin: false, level: 0 };
+    }
   }
 
   static async checkCommandPermission(interaction: any, commandName: string): Promise<boolean> {
