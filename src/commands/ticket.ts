@@ -1,5 +1,6 @@
-import { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, PermissionFlagsBits, MessageFlags } from 'discord.js';
+import { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, PermissionFlagsBits, MessageFlags, StringSelectMenuBuilder, ModalBuilder, TextInputBuilder, TextInputStyle } from 'discord.js';
 import { featureManager } from '../features/featureManager.js';
+import { dbManager } from '../database/database.js';
 
 export const data = new SlashCommandBuilder()
   .setName('ticket')
@@ -37,7 +38,7 @@ export async function execute(interaction: any) {
 
   switch (subcommand) {
     case 'create':
-      await createTicket(interaction);
+      await createTicketWithCategories(interaction);
       break;
     case 'close':
       await closeTicket(interaction);
@@ -48,24 +49,92 @@ export async function execute(interaction: any) {
   }
 }
 
-async function createTicket(interaction: any) {
+async function createTicketWithCategories(interaction: any) {
   const reason = interaction.options.getString('reason');
   const guild = interaction.guild;
   const user = interaction.user;
 
-  // SOFORTIGER REPLY - Verhindert Interaction Timeout
-  await interaction.deferReply({ flags: MessageFlags.Ephemeral }); // Modern flags syntax
+  // Defer reply to prevent timeout
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+  try {
+    // Get available categories for this guild
+    const categories = await dbManager.getTicketCategories(guild.id, true); // Only active categories
+
+    if (categories.length === 0) {
+      // No categories available, create ticket without category
+      await createTicket(interaction, reason, null);
+      return;
+    }
+
+    // If only one category exists, use it directly
+    if (categories.length === 1) {
+      await createTicket(interaction, reason, categories[0]);
+      return;
+    }
+
+    // Multiple categories available - show selection menu
+    const selectMenu = new StringSelectMenuBuilder()
+      .setCustomId('ticket_category_select')
+      .setPlaceholder('Wähle eine Ticket-Kategorie aus...');
+
+    // Add categories to select menu
+    categories.forEach(category => {
+      const emoji = category.emoji || '📝';
+      const label = category.name;
+      const description = category.description || 'Keine Beschreibung verfügbar';
+      
+      selectMenu.addOptions([{
+        label: label,
+        description: description.length > 100 ? description.substring(0, 97) + '...' : description,
+        value: category.id.toString(),
+        emoji: emoji
+      }]);
+    });
+
+    const row = new ActionRowBuilder().addComponents(selectMenu);
+
+    const embed = new EmbedBuilder()
+      .setTitle('🎫 Ticket erstellen')
+      .setDescription(`**Grund:** ${reason}\n\nBitte wähle eine passende Kategorie für dein Ticket aus:`)
+      .setColor(0x5865F2)
+      .setTimestamp();
+
+    await interaction.editReply({
+      embeds: [embed],
+      components: [row]
+    });
+
+    // Store the reason in a temporary way (you might want to use a database or cache for this)
+    // For now, we'll handle this in the interaction handler
+    
+  } catch (error) {
+    console.error('Error showing ticket categories:', error);
+    await interaction.editReply({
+      content: '❌ Fehler beim Laden der Ticket-Kategorien. Erstelle Ticket ohne Kategorie...'
+    });
+    
+    // Fallback: create ticket without category
+    await createTicket(interaction, reason, null);
+  }
+}
+
+async function createTicket(interaction: any, reason: string, category: any = null) {
+  const guild = interaction.guild;
+  const user = interaction.user;
 
   // Generate unique ticket channel name
   const timestamp = Date.now();
-  const ticketChannelName = `ticket-${user.username.toLowerCase()}-${timestamp}`;
+  const shortId = timestamp.toString().slice(-6);
+  const categoryPrefix = category ? `${category.name.toLowerCase().replace(/\s+/g, '-')}-` : '';
+  const ticketChannelName = `ticket-${categoryPrefix}${user.username.toLowerCase()}-${shortId}`;
 
   try {
-    // Create ticket channel with unique name
+    // Create ticket channel
     const ticketChannel = await guild.channels.create({
       name: ticketChannelName,
       type: 0, // Text channel
-      topic: `🎫 ${reason} | Erstellt von ${user.tag}`,
+      topic: `🎫 ${reason} | Erstellt von ${user.tag} ${category ? `| ${category.name}` : ''}`,
       permissionOverwrites: [
         {
           id: guild.roles.everyone.id,
@@ -78,228 +147,407 @@ async function createTicket(interaction: any) {
       ],
     });
 
-    // Asynchrone Operationen nach Channel-Erstellung
-    Promise.all([
-      // Save to database
-      (async () => {
-        try {
-          const { dbManager } = await import('../database/database.js');
-          await dbManager.createTicket({
-            userId: user.id,
-            username: user.username,
-            reason,
-            channelId: ticketChannel.id,
-            guildId: guild.id
-          });
-        } catch (error) {
-          console.error('Error saving ticket to database:', error);
+    // Save to database with category
+    const ticketId = await dbManager.createTicket({
+      userId: user.id,
+      username: user.username,
+      reason,
+      channelId: ticketChannel.id,
+      guildId: guild.id,
+      categoryId: category ? category.id : null
+    });
+
+    // Create welcome embed
+    const welcomeEmbed = new EmbedBuilder()
+      .setTitle('🎫 Neues Ticket erstellt')
+      .setDescription(`Willkommen **${user.username}**!\n\n**Grund:** ${reason}`)
+      .setColor(category ? parseInt(category.color.replace('#', ''), 16) : 0x5865F2)
+      .addFields([
+        {
+          name: 'Ticket ID',
+          value: `#${ticketId}`,
+          inline: true
+        },
+        {
+          name: 'Kategorie',
+          value: category ? `${category.emoji || '📝'} ${category.name}` : 'Keine Kategorie',
+          inline: true
+        },
+        {
+          name: 'Status',
+          value: '🟢 Offen',
+          inline: true
         }
-      })(),
-      
-      // Log ticket creation (Discord bot can write directly to channels)
-      (async () => {
-        console.log(`🎫 Ticket created: ${ticketChannel.name} for ${user.username} - ${reason}`);
-      })()
-    ]);
+      ])
+      .setTimestamp()
+      .setFooter({ text: `Erstellt von ${user.username}`, iconURL: user.displayAvatarURL() });
 
-    const embed = new EmbedBuilder()
-      .setTitle('🎫 Neues Ticket')
-      .setDescription(`**Grund:** ${reason}\n**Erstellt von:** ${user}`)
-      .setColor(0x00AE86)
-      .setTimestamp();
+    // Add category description if available
+    if (category && category.description) {
+      welcomeEmbed.addFields([{
+        name: 'Kategorie-Beschreibung',
+        value: category.description
+      }]);
+    }
 
-    const closeButton = new ActionRowBuilder()
-      .addComponents(
-        new ButtonBuilder()
-          .setCustomId('close_ticket')
-          .setLabel('Ticket schließen')
-          .setStyle(ButtonStyle.Danger)
-          .setEmoji('🔒')
-      );
+    // Close button
+    const closeButton = new ButtonBuilder()
+      .setCustomId(`close_ticket_${ticketId}`)
+      .setLabel('Ticket schließen')
+      .setStyle(ButtonStyle.Danger)
+      .setEmoji('🔒');
 
-    await ticketChannel.send({ embeds: [embed], components: [closeButton] });
-    await interaction.editReply({ content: `Ticket erstellt: ${ticketChannel}` });
+    const actionRow = new ActionRowBuilder().addComponents(closeButton);
+
+    // Send welcome message to ticket channel
+    await ticketChannel.send({
+      content: `<@${user.id}>`,
+      embeds: [welcomeEmbed],
+      components: [actionRow]
+    });
+
+    // Update the original interaction
+    const successEmbed = new EmbedBuilder()
+      .setTitle('✅ Ticket erstellt')
+      .setDescription(`Dein Ticket wurde erfolgreich erstellt: <#${ticketChannel.id}>`)
+      .setColor(0x57F287);
+
+    await interaction.editReply({
+      embeds: [successEmbed],
+      components: []
+    });
+
+    console.log(`✅ Ticket created: ${ticketChannelName} by ${user.username} in guild ${guild.name}`);
 
   } catch (error) {
     console.error('Error creating ticket:', error);
-    await interaction.editReply({ content: '❌ Fehler beim Erstellen des Tickets!' });
+    
+    const errorEmbed = new EmbedBuilder()
+      .setTitle('❌ Fehler')
+      .setDescription('Es gab einen Fehler beim Erstellen des Tickets. Bitte versuche es später erneut.')
+      .setColor(0xED4245);
+
+    await interaction.editReply({
+      embeds: [errorEmbed],
+      components: []
+    });
   }
 }
 
 async function closeTicket(interaction: any) {
   const channel = interaction.channel;
-  
-  // Sofortiger Reply um Timeout zu vermeiden
-  await interaction.deferReply();
-  
+  const user = interaction.user;
+
+  // Check if this is a ticket channel
   if (!channel.name.startsWith('ticket-')) {
-    await interaction.editReply({ content: 'Dieser Befehl kann nur in Ticket-Kanälen verwendet werden!' });
+    await interaction.reply({
+      content: '❌ Dieser Befehl kann nur in Ticket-Kanälen verwendet werden.',
+      flags: MessageFlags.Ephemeral
+    });
     return;
   }
 
-  const embed = new EmbedBuilder()
-    .setTitle('🔒 Ticket wird geschlossen')
-    .setDescription('Dieser Kanal wird in 5 Sekunden gelöscht.')
-    .setColor(0xFF0000)
-    .setTimestamp();
+  await interaction.deferReply();
 
-  await interaction.editReply({ embeds: [embed] });
+  try {
+    // Generate transcript
+    const messages = await channel.messages.fetch({ limit: 100 });
+    const transcript = generateTranscript(messages);
 
-  setTimeout(async () => {
-    await channel.delete();
-  }, 5000);
+    // Find ticket in database by channel ID
+    const tickets = await dbManager.getTickets(interaction.guild.id);
+    const ticket = tickets.find((t: any) => t.channel_id === channel.id);
+
+    if (ticket) {
+      // Save transcript and close ticket
+      await dbManager.saveTicketTranscript(ticket.id, transcript);
+      await dbManager.closeTicket(ticket.id);
+    }
+
+    // Create closing embed
+    const closeEmbed = new EmbedBuilder()
+      .setTitle('🔒 Ticket geschlossen')
+      .setDescription(`Ticket wurde von **${user.username}** geschlossen.`)
+      .setColor(0xED4245)
+      .setTimestamp();
+
+    await interaction.editReply({
+      embeds: [closeEmbed]
+    });
+
+    // Delete channel after 10 seconds
+    setTimeout(async () => {
+      try {
+        await channel.delete();
+      } catch (error) {
+        console.error('Error deleting ticket channel:', error);
+      }
+    }, 10000);
+
+    console.log(`✅ Ticket closed: ${channel.name} by ${user.username} in guild ${interaction.guild.name}`);
+
+  } catch (error) {
+    console.error('Error closing ticket:', error);
+    await interaction.editReply({
+      content: '❌ Fehler beim Schließen des Tickets.'
+    });
+  }
 }
 
 async function setupTicketSystem(interaction: any) {
-  // Sofortiger Reply um Timeout zu vermeiden
   await interaction.deferReply();
 
-  const embed = new EmbedBuilder()
-    .setTitle('🎫 Ticket System')
-    .setDescription('Wähle eine Kategorie, um ein neues Ticket zu erstellen:')
-    .addFields([
-      { name: '🆘 Support', value: 'Allgemeine Hilfe und Fragen', inline: true },
-      { name: '🐛 Bug Report', value: 'Fehler oder Probleme melden', inline: true },
-      { name: '💡 Feature Request', value: 'Neue Funktionen vorschlagen', inline: true },
-      { name: '⚙️ Administration', value: 'Server-Verwaltung', inline: true },
-      { name: '❓ Sonstiges', value: 'Andere Anliegen', inline: true }
-    ])
-    .setColor(0x00AE86)
-    .setTimestamp();
+  try {
+    // Get available categories
+    const categories = await dbManager.getTicketCategories(interaction.guild.id, true);
 
-  // Erste Reihe: Support, Bug, Feature
-  const row1 = new ActionRowBuilder()
-    .addComponents(
-      new ButtonBuilder()
-        .setCustomId('ticket_support')
-        .setLabel('Support')
+    const embed = new EmbedBuilder()
+      .setTitle('🎫 Ticket System')
+      .setDescription('Wähle eine Kategorie aus, um ein neues Ticket zu erstellen:')
+      .setColor(0x5865F2)
+      .setTimestamp();
+
+    if (categories.length === 0) {
+      embed.setDescription('⚠️ Keine Ticket-Kategorien verfügbar. Bitte erstelle zuerst Kategorien im Dashboard.');
+      
+      await interaction.editReply({
+        embeds: [embed]
+      });
+      return;
+    }
+
+    // Create buttons for each category (max 25 components)
+    const components = [];
+    const buttons = [];
+
+    for (let i = 0; i < Math.min(categories.length, 20); i++) { // Max 20 categories (4 rows of 5)
+      const category = categories[i];
+      
+      const button = new ButtonBuilder()
+        .setCustomId(`create_ticket_${category.id}`)
+        .setLabel(category.name)
         .setStyle(ButtonStyle.Primary)
-        .setEmoji('🆘'),
-      new ButtonBuilder()
-        .setCustomId('ticket_bug')
-        .setLabel('Bug Report')
-        .setStyle(ButtonStyle.Danger)
-        .setEmoji('🐛'),
-      new ButtonBuilder()
-        .setCustomId('ticket_feature')
-        .setLabel('Feature Request')
-        .setStyle(ButtonStyle.Success)
-        .setEmoji('💡')
-    );
+        .setEmoji(category.emoji || '📝');
 
-  // Zweite Reihe: Administration, Sonstiges
-  const row2 = new ActionRowBuilder()
-    .addComponents(
-      new ButtonBuilder()
-        .setCustomId('ticket_admin')
-        .setLabel('Administration')
-        .setStyle(ButtonStyle.Secondary)
-        .setEmoji('⚙️'),
-      new ButtonBuilder()
-        .setCustomId('ticket_other')
-        .setLabel('Sonstiges')
-        .setStyle(ButtonStyle.Secondary)
-        .setEmoji('❓')
-    );
+      buttons.push(button);
 
-  await interaction.editReply({ embeds: [embed], components: [row1, row2] });
+      // Create new row every 5 buttons
+      if (buttons.length === 5 || i === categories.length - 1) {
+        components.push(new ActionRowBuilder().addComponents(buttons));
+        buttons.length = 0; // Clear array
+      }
+    }
+
+    await interaction.editReply({
+      embeds: [embed],
+      components
+    });
+
+  } catch (error) {
+    console.error('Error setting up ticket system:', error);
+    await interaction.editReply({
+      content: '❌ Fehler beim Einrichten des Ticket-Systems.'
+    });
+  }
 }
 
-// Neue Funktion: Kategorie-basierte Ticket-Erstellung
-export async function createCategoryTicket(interaction: any, category: string) {
-  const guild = interaction.guild;
-  const user = interaction.user;
-
-  // Sofortiger Reply um Timeout zu vermeiden
-  await interaction.deferReply({ flags: 64 }); // ephemeral
-
-  // Kategorie-Konfiguration
-  const categories: Record<string, { name: string; emoji: string; color: number; description: string }> = {
-    'support': { name: 'Support', emoji: '🆘', color: 0x3498db, description: 'Allgemeine Hilfe und Fragen' },
-    'bug': { name: 'Bug Report', emoji: '🐛', color: 0xe74c3c, description: 'Fehler oder Probleme melden' },
-    'feature': { name: 'Feature Request', emoji: '💡', color: 0x2ecc71, description: 'Neue Funktionen vorschlagen' },
-    'admin': { name: 'Administration', emoji: '⚙️', color: 0x95a5a6, description: 'Server-Verwaltung' },
-    'other': { name: 'Sonstiges', emoji: '❓', color: 0x9b59b6, description: 'Andere Anliegen' }
+function generateTranscript(messages: any) {
+  const transcript = {
+    channel: messages.first()?.channel?.name || 'Unknown',
+    messages: messages.map((msg: any) => ({
+      id: msg.id,
+      author: {
+        id: msg.author.id,
+        username: msg.author.username,
+        discriminator: msg.author.discriminator,
+        avatar: msg.author.avatar
+      },
+      content: msg.content,
+      timestamp: msg.createdTimestamp,
+      embeds: msg.embeds.map((embed: any) => ({
+        title: embed.title,
+        description: embed.description,
+        color: embed.color,
+        fields: embed.fields
+      })),
+      attachments: msg.attachments.map((att: any) => ({
+        id: att.id,
+        filename: att.name,
+        url: att.url
+      }))
+    })).reverse() // Reverse to get chronological order
   };
 
-  const categoryInfo = categories[category];
-  if (!categoryInfo) {
-    await interaction.editReply({ content: '❌ Ungültige Ticket-Kategorie!' });
+  return JSON.stringify(transcript, null, 2);
+}
+
+// Export function for handling category selection
+export async function handleCategorySelection(interaction: any) {
+  if (!interaction.isStringSelectMenu() || interaction.customId !== 'ticket_category_select') {
     return;
   }
 
-  // Generate unique ticket channel name with category and timestamp
-  const timestamp = Date.now();
-  const shortId = timestamp.toString().slice(-6); // Last 6 digits for readability
-  const ticketChannelName = `ticket-${category}-${user.username.toLowerCase()}-${shortId}`;
+  const categoryId = parseInt(interaction.values[0]);
+  const guild = interaction.guild;
 
   try {
-    // Create ticket channel with unique name
-    const ticketChannel = await guild.channels.create({
-      name: ticketChannelName,
-      type: 0, // Text channel
-      topic: `${categoryInfo.emoji} ${categoryInfo.name} | Erstellt von ${user.tag}`,
-      permissionOverwrites: [
-        {
-          id: guild.roles.everyone.id,
-          deny: [PermissionFlagsBits.ViewChannel],
-        },
-        {
-          id: user.id,
-          allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages],
-        },
-      ],
-    });
-
-    // Asynchrone Operationen nach Channel-Erstellung
-    Promise.all([
-      // Save to database
-      (async () => {
-        try {
-          const { dbManager } = await import('../database/database.js');
-          await dbManager.createTicket({
-            userId: user.id,
-            username: user.username,
-            reason: categoryInfo.name,
-            channelId: ticketChannel.id,
-            guildId: guild.id
-          });
-        } catch (error) {
-          console.error('Error saving ticket to database:', error);
-        }
-      })(),
-      
-      // Log ticket creation (Discord bot can write directly to channels)
-      (async () => {
-        console.log(`🎫 Ticket created: ${ticketChannel.name} for ${user.username} - ${categoryInfo.name}`);
-      })()
-    ]);
-
-    const embed = new EmbedBuilder()
-      .setTitle(`${categoryInfo.emoji} Neues ${categoryInfo.name} Ticket`)
-      .setDescription(`**Kategorie:** ${categoryInfo.name}\n**Beschreibung:** ${categoryInfo.description}\n**Erstellt von:** ${user}`)
-      .setColor(categoryInfo.color)
-      .setTimestamp();
-
-    const closeButton = new ActionRowBuilder()
-      .addComponents(
-        new ButtonBuilder()
-          .setCustomId('close_ticket')
-          .setLabel('Ticket schließen')
-          .setStyle(ButtonStyle.Danger)
-          .setEmoji('🔒')
-      );
-
-    await ticketChannel.send({ 
-      content: `${user}, willkommen in deinem ${categoryInfo.name} Ticket! 🎫\n\nBitte beschreibe dein Anliegen so detailliert wie möglich.`,
-      embeds: [embed], 
-      components: [closeButton] 
-    });
+    // Get the category from database
+    const category = await dbManager.getTicketCategoryById(categoryId, guild.id);
     
-    await interaction.editReply({ content: `${categoryInfo.emoji} **${categoryInfo.name}** Ticket erstellt: ${ticketChannel}` });
+    if (!category) {
+      await interaction.reply({
+        content: '❌ Kategorie nicht gefunden.',
+        flags: MessageFlags.Ephemeral
+      });
+      return;
+    }
+
+    // Extract reason from the original embed description
+    const originalEmbed = interaction.message.embeds[0];
+    const description = originalEmbed.description;
+    const reasonMatch = description.match(/\*\*Grund:\*\* (.+)/);
+    const reason = reasonMatch ? reasonMatch[1] : 'Kein Grund angegeben';
+
+    await interaction.deferUpdate();
+
+    // Create the ticket with the selected category
+    await createTicket(interaction, reason, category);
+
+  } catch (error) {
+    console.error('Error handling category selection:', error);
+    await interaction.reply({
+      content: '❌ Fehler bei der Kategorie-Auswahl.',
+      flags: MessageFlags.Ephemeral
+    });
+  }
+}
+
+// Export function for handling ticket creation buttons
+export async function handleTicketButton(interaction: any) {
+  if (!interaction.isButton()) return;
+
+  const customId = interaction.customId;
+
+  // Handle create ticket buttons from setup
+  if (customId.startsWith('create_ticket_')) {
+    const categoryId = parseInt(customId.split('_')[2]);
+    
+    // Show reason input modal
+    const { ModalBuilder, TextInputBuilder, TextInputStyle } = await import('discord.js');
+    
+    const modal = new ModalBuilder()
+      .setCustomId(`ticket_reason_modal_${categoryId}`)
+      .setTitle('Neues Ticket erstellen');
+
+    const reasonInput = new TextInputBuilder()
+      .setCustomId('reason')
+      .setLabel('Grund für das Ticket')
+      .setStyle(TextInputStyle.Paragraph)
+      .setPlaceholder('Beschreibe dein Anliegen...')
+      .setRequired(true)
+      .setMaxLength(1000);
+
+    const actionRow = new ActionRowBuilder<TextInputBuilder>().addComponents(reasonInput);
+    modal.addComponents(actionRow);
+
+    await interaction.showModal(modal);
+  }
+
+  // Handle close ticket buttons
+  if (customId.startsWith('close_ticket_')) {
+    await closeTicket(interaction);
+  }
+}
+
+// Export function for handling ticket reason modals
+export async function handleTicketModal(interaction: any) {
+  if (!interaction.isModalSubmit()) return;
+
+  const customId = interaction.customId;
+
+  if (customId.startsWith('ticket_reason_modal_')) {
+    const categoryId = parseInt(customId.split('_')[3]);
+    const reason = interaction.fields.getTextInputValue('reason');
+
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+    try {
+      // Get the category from database
+      const category = await dbManager.getTicketCategoryById(categoryId, interaction.guild.id);
+      
+      if (!category) {
+        await interaction.editReply({
+          content: '❌ Kategorie nicht gefunden.'
+        });
+        return;
+      }
+
+      // Create the ticket with the selected category and reason
+      await createTicket(interaction, reason, category);
+
+    } catch (error) {
+      console.error('Error handling ticket modal:', error);
+      await interaction.editReply({
+        content: '❌ Fehler beim Erstellen des Tickets.'
+      });
+    }
+  }
+}
+
+// Export function for category ticket creation (used in index.ts)
+export async function createCategoryTicket(interaction: any, categoryId: string) {
+  try {
+    if (!interaction.guild) {
+      await interaction.reply({
+        content: '❌ Dieser Command kann nur in einem Server verwendet werden.',
+        flags: MessageFlags.Ephemeral
+      });
+      return;
+    }
+
+    // Get the category from database
+    const category = await dbManager.getTicketCategoryById(parseInt(categoryId), interaction.guild.id);
+    
+    if (!category) {
+      await interaction.reply({
+        content: '❌ Kategorie nicht gefunden.',
+        flags: MessageFlags.Ephemeral
+      });
+      return;
+    }
+
+    // Create modal for ticket details
+    const modal = new ModalBuilder()
+      .setCustomId(`create_ticket_modal_${categoryId}`)
+      .setTitle(`Neues ${category.name} Ticket`);
+
+    const subjectInput = new TextInputBuilder()
+      .setCustomId('ticket_subject')
+      .setLabel('Betreff')
+      .setPlaceholder('Beschreibe kurz dein Anliegen...')
+      .setStyle(TextInputStyle.Short)
+      .setMaxLength(100)
+      .setRequired(true);
+
+    const descriptionInput = new TextInputBuilder()
+      .setCustomId('ticket_description')
+      .setLabel('Beschreibung')
+      .setPlaceholder('Beschreibe dein Problem ausführlich...')
+      .setStyle(TextInputStyle.Paragraph)
+      .setMaxLength(1000)
+      .setRequired(true);
+
+    const firstActionRow = new ActionRowBuilder<TextInputBuilder>().addComponents(subjectInput);
+    const secondActionRow = new ActionRowBuilder<TextInputBuilder>().addComponents(descriptionInput);
+
+    modal.addComponents(firstActionRow, secondActionRow);
+    await interaction.showModal(modal);
 
   } catch (error) {
     console.error('Error creating category ticket:', error);
-    await interaction.editReply({ content: '❌ Fehler beim Erstellen des Tickets!' });
+    await interaction.reply({
+      content: '❌ Fehler beim Erstellen des Tickets.',
+      flags: MessageFlags.Ephemeral
+    });
   }
 }

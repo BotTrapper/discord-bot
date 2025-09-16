@@ -71,6 +71,23 @@ export class DatabaseManager {
       // Enable UUID extension
       await client.query('CREATE EXTENSION IF NOT EXISTS "uuid-ossp"');
 
+      // Ticket categories table for guild-specific ticket categories (MUST be created BEFORE tickets table for foreign key)
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS ticket_categories (
+          id SERIAL PRIMARY KEY,
+          guild_id TEXT NOT NULL,
+          name TEXT NOT NULL,
+          description TEXT,
+          emoji TEXT,
+          color TEXT DEFAULT '#5865F2',
+          is_active BOOLEAN DEFAULT true,
+          sort_order INTEGER DEFAULT 0,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(guild_id, name)
+        )
+      `);
+
       // Tickets table
       await client.query(`
         CREATE TABLE IF NOT EXISTS tickets (
@@ -97,6 +114,20 @@ export class DatabaseManager {
             WHERE table_name='tickets' AND column_name='transcript'
           ) THEN
             ALTER TABLE tickets ADD COLUMN transcript TEXT;
+          END IF;
+        END $$;
+      `);
+
+      // Add category_id column if it doesn't exist (migration for ticket categories)
+      await client.query(`
+        DO $$ 
+        BEGIN 
+          IF NOT EXISTS (
+            SELECT column_name 
+            FROM information_schema.columns 
+            WHERE table_name='tickets' AND column_name='category_id'
+          ) THEN
+            ALTER TABLE tickets ADD COLUMN category_id INTEGER REFERENCES ticket_categories(id) ON DELETE SET NULL;
           END IF;
         END $$;
       `);
@@ -251,6 +282,8 @@ export class DatabaseManager {
       await client.query('CREATE INDEX IF NOT EXISTS idx_tickets_guild_id ON tickets(guild_id)');
       await client.query('CREATE INDEX IF NOT EXISTS idx_tickets_user_id ON tickets(user_id)');
       await client.query('CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets(status)');
+      await client.query('CREATE INDEX IF NOT EXISTS idx_ticket_categories_guild_id ON ticket_categories(guild_id)');
+      await client.query('CREATE INDEX IF NOT EXISTS idx_ticket_categories_active ON ticket_categories(is_active)');
       await client.query('CREATE INDEX IF NOT EXISTS idx_auto_responses_guild_id ON auto_responses(guild_id)');
       await client.query('CREATE INDEX IF NOT EXISTS idx_bot_stats_guild_id ON bot_stats(guild_id)');
       await client.query('CREATE INDEX IF NOT EXISTS idx_bot_stats_executed_at ON bot_stats(executed_at)');
@@ -258,6 +291,8 @@ export class DatabaseManager {
       await client.query('CREATE INDEX IF NOT EXISTS idx_webhooks_guild_id ON webhooks(guild_id)');
       await client.query('CREATE INDEX IF NOT EXISTS idx_user_tokens_user_id ON user_tokens(user_id)');
       await client.query('CREATE INDEX IF NOT EXISTS idx_user_tokens_expires_at ON user_tokens(expires_at)');
+      await client.query('CREATE INDEX IF NOT EXISTS idx_ticket_categories_guild_id ON ticket_categories(guild_id)');
+      await client.query('CREATE INDEX IF NOT EXISTS idx_ticket_categories_active ON ticket_categories(guild_id, is_active)');
 
       console.log('✅ Database tables initialized');
       console.log('✅ Database initialization complete');
@@ -279,13 +314,14 @@ export class DatabaseManager {
     reason: string;
     channelId: string;
     guildId: string;
+    categoryId?: number;
   }) {
     const client = await this.pool.connect();
     try {
       const result = await client.query(
-        `INSERT INTO tickets (user_id, username, reason, channel_id, guild_id) 
-         VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-        [ticketData.userId, ticketData.username, ticketData.reason, ticketData.channelId, ticketData.guildId]
+        `INSERT INTO tickets (user_id, username, reason, channel_id, guild_id, category_id) 
+         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+        [ticketData.userId, ticketData.username, ticketData.reason, ticketData.channelId, ticketData.guildId, ticketData.categoryId || null]
       );
       return result.rows[0].id;
     } finally {
@@ -323,7 +359,14 @@ export class DatabaseManager {
     const client = await this.pool.connect();
     try {
       const result = await client.query(
-        `SELECT * FROM tickets WHERE id = $1 AND guild_id = $2`,
+        `SELECT 
+          t.*,
+          tc.name as category_name,
+          tc.emoji as category_emoji,
+          tc.color as category_color
+        FROM tickets t
+        LEFT JOIN ticket_categories tc ON t.category_id = tc.id
+        WHERE t.id = $1 AND t.guild_id = $2`,
         [ticketId, guildId]
       );
       return result.rows[0] || null;
@@ -335,15 +378,23 @@ export class DatabaseManager {
   async getTickets(guildId: string, status?: string) {
     const client = await this.pool.connect();
     try {
-      let query = `SELECT * FROM tickets WHERE guild_id = $1`;
+      let query = `
+        SELECT 
+          t.*,
+          tc.name as category_name,
+          tc.emoji as category_emoji,
+          tc.color as category_color
+        FROM tickets t
+        LEFT JOIN ticket_categories tc ON t.category_id = tc.id
+        WHERE t.guild_id = $1`;
       const params = [guildId];
       
       if (status) {
-        query += ` AND status = $2`;
+        query += ` AND t.status = $2`;
         params.push(status);
       }
       
-      query += ` ORDER BY created_at DESC`;
+      query += ` ORDER BY t.created_at DESC`;
 
       const result = await client.query(query, params);
       return result.rows;
@@ -651,7 +702,8 @@ export class DatabaseManager {
       if (row) {
         return {
           ...row,
-          enabled_features: JSON.parse(row.enabled_features || '[]'),
+          enabledFeatures: JSON.parse(row.enabled_features || '[]'), // Convert to camelCase
+          enabled_features: JSON.parse(row.enabled_features || '[]'), // Keep original for compatibility
           settings: JSON.parse(row.settings || '{}')
         };
       }
@@ -671,7 +723,8 @@ export class DatabaseManager {
       const newRow = insertResult.rows[0];
       return {
         ...newRow,
-        enabled_features: JSON.parse(newRow.enabled_features || '[]'),
+        enabledFeatures: JSON.parse(newRow.enabled_features || '[]'), // Convert to camelCase
+        enabled_features: JSON.parse(newRow.enabled_features || '[]'), // Keep original for compatibility
         settings: JSON.parse(newRow.settings || '{}')
       };
     } finally {
@@ -804,10 +857,23 @@ export class DatabaseManager {
   async isGlobalAdmin(userId: string): Promise<{ isAdmin: boolean; level: number }> {
     const client = await this.pool.connect();
     try {
+      console.log('🔍 Checking global admin status for userId:', userId);
+      
+      // Debug: Show all global admins
+      const allAdminsResult = await client.query(`SELECT user_id, username, level, is_active FROM global_admins`);
+      console.log('🔍 All global admins in database:', allAdminsResult.rows);
+      
       const result = await client.query(
         `SELECT level FROM global_admins WHERE user_id = $1 AND is_active = true`,
         [userId]
       );
+      
+      console.log('🔍 Global admin query result:', {
+        rowCount: result.rowCount,
+        rows: result.rows,
+        searchedUserId: userId
+      });
+      
       if (result.rows.length > 0) {
         return { isAdmin: true, level: result.rows[0].level };
       }
@@ -928,6 +994,156 @@ export class DatabaseManager {
     } catch (error) {
       console.error('Get all guilds error:', error);
       return [];
+    } finally {
+      client.release();
+    }
+  }
+
+  // Ticket Categories methods
+  async createTicketCategory(categoryData: {
+    guildId: string;
+    name: string;
+    description?: string;
+    emoji?: string;
+    color?: string;
+    sortOrder?: number;
+  }) {
+    const client = await this.pool.connect();
+    try {
+      const result = await client.query(
+        `INSERT INTO ticket_categories (guild_id, name, description, emoji, color, sort_order) 
+         VALUES ($1, $2, $3, $4, $5, $6) 
+         RETURNING id`,
+        [
+          categoryData.guildId,
+          categoryData.name,
+          categoryData.description || null,
+          categoryData.emoji || null,
+          categoryData.color || '#5865F2',
+          categoryData.sortOrder || 0
+        ]
+      );
+      return result.rows[0].id;
+    } finally {
+      client.release();
+    }
+  }
+
+  async getTicketCategories(guildId: string, activeOnly: boolean = true) {
+    const client = await this.pool.connect();
+    try {
+      let query = `SELECT * FROM ticket_categories WHERE guild_id = $1`;
+      const params = [guildId];
+
+      if (activeOnly) {
+        query += ` AND is_active = true`;
+      }
+
+      query += ` ORDER BY sort_order ASC, name ASC`;
+
+      const result = await client.query(query, params);
+      return result.rows;
+    } finally {
+      client.release();
+    }
+  }
+
+  async getTicketCategoryById(categoryId: number, guildId: string) {
+    const client = await this.pool.connect();
+    try {
+      const result = await client.query(
+        `SELECT * FROM ticket_categories WHERE id = $1 AND guild_id = $2`,
+        [categoryId, guildId]
+      );
+      return result.rows[0] || null;
+    } finally {
+      client.release();
+    }
+  }
+
+  async updateTicketCategory(categoryId: number, guildId: string, updateData: {
+    name?: string;
+    description?: string;
+    emoji?: string;
+    color?: string;
+    isActive?: boolean;
+    sortOrder?: number;
+  }) {
+    const client = await this.pool.connect();
+    try {
+      const updates: string[] = [];
+      const values: any[] = [];
+      let paramIndex = 1;
+
+      if (updateData.name !== undefined) {
+        updates.push(`name = $${paramIndex++}`);
+        values.push(updateData.name);
+      }
+      if (updateData.description !== undefined) {
+        updates.push(`description = $${paramIndex++}`);
+        values.push(updateData.description);
+      }
+      if (updateData.emoji !== undefined) {
+        updates.push(`emoji = $${paramIndex++}`);
+        values.push(updateData.emoji);
+      }
+      if (updateData.color !== undefined) {
+        updates.push(`color = $${paramIndex++}`);
+        values.push(updateData.color);
+      }
+      if (updateData.isActive !== undefined) {
+        updates.push(`is_active = $${paramIndex++}`);
+        values.push(updateData.isActive);
+      }
+      if (updateData.sortOrder !== undefined) {
+        updates.push(`sort_order = $${paramIndex++}`);
+        values.push(updateData.sortOrder);
+      }
+
+      if (updates.length === 0) {
+        return 0; // No updates
+      }
+
+      updates.push(`updated_at = CURRENT_TIMESTAMP`);
+      values.push(categoryId, guildId);
+
+      const query = `UPDATE ticket_categories SET ${updates.join(', ')} WHERE id = $${paramIndex++} AND guild_id = $${paramIndex++}`;
+
+      const result = await client.query(query, values);
+      return result.rowCount;
+    } finally {
+      client.release();
+    }
+  }
+
+  async deleteTicketCategory(categoryId: number, guildId: string) {
+    const client = await this.pool.connect();
+    try {
+      // First, set category_id to null for all tickets using this category
+      await client.query(
+        `UPDATE tickets SET category_id = NULL WHERE category_id = $1 AND guild_id = $2`,
+        [categoryId, guildId]
+      );
+
+      // Then delete the category
+      const result = await client.query(
+        `DELETE FROM ticket_categories WHERE id = $1 AND guild_id = $2`,
+        [categoryId, guildId]
+      );
+      return result.rowCount;
+    } finally {
+      client.release();
+    }
+  }
+
+  async getTicketCategoriesCount(guildId: string) {
+    const client = await this.pool.connect();
+    try {
+      const result = await client.query(
+        `SELECT COUNT(*) as count FROM ticket_categories WHERE guild_id = $1 AND is_active = true`,
+        [guildId]
+      );
+      return parseInt(result.rows[0].count);
     } finally {
       client.release();
     }

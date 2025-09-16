@@ -118,6 +118,53 @@ export async function initializeGuildDefaults(guildId: string) {
       
       console.log(`✅ Default auto responses created for guild ${guildId}`);
     }
+
+    // Check if guild already has ticket categories
+    const existingCategories = await dbManager.getTicketCategories(guildId);
+    
+    if (existingCategories.length === 0) {
+      // Add default ticket categories
+      const defaultCategories = [
+        {
+          guildId,
+          name: 'Allgemeine Hilfe',
+          description: 'Allgemeine Fragen und Support',
+          emoji: '❓',
+          color: '#5865F2',
+          sortOrder: 0
+        },
+        {
+          guildId,
+          name: 'Technische Probleme',
+          description: 'Hilfe bei technischen Schwierigkeiten',
+          emoji: '🔧',
+          color: '#ED4245',
+          sortOrder: 1
+        },
+        {
+          guildId,
+          name: 'Moderation',
+          description: 'Meldungen und Moderationsanfragen',
+          emoji: '🛡️',
+          color: '#FEE75C',
+          sortOrder: 2
+        },
+        {
+          guildId,
+          name: 'Feedback',
+          description: 'Vorschläge und Feedback',
+          emoji: '💡',
+          color: '#57F287',
+          sortOrder: 3
+        }
+      ];
+
+      for (const category of defaultCategories) {
+        await dbManager.createTicketCategory(category);
+      }
+      
+      console.log(`✅ Default ticket categories created for guild ${guildId}`);
+    }
   } catch (error) {
     console.error(`❌ Error initializing defaults for guild ${guildId}:`, error);
   }

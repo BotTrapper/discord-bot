@@ -391,7 +391,15 @@ app.get('/auth/discord', passport.authenticate('discord'));
 // Admin API routes
 app.get('/api/admin/status', requireAuth, async (req: Request, res: Response) => {
   const user = req.user as CustomUser;
+  console.log('🔍 Admin status check for user:', {
+    id: user.id,
+    username: user.username,
+    timestamp: new Date().toISOString()
+  });
+  
   const adminStatus = await dbManager.isGlobalAdmin(user.id);
+  console.log('🔍 Admin status result:', adminStatus);
+  
   return res.json(adminStatus);
 });
 
@@ -639,7 +647,8 @@ app.get('/api/dashboard/:guildId/stats', requireAuth, requireGuildAccess, async 
       botJoinedAt: guild.members.cache.get(discordClient.user?.id || '')?.joinedAt?.toISOString(),
       ticketCount: await dbManager.getTicketCount(guildId),
       autoResponseCount: await dbManager.getAutoResponseCount(guildId),
-      openTickets: await dbManager.getTicketCount(guildId, 'open')
+      openTickets: await dbManager.getTicketCount(guildId, 'open'),
+      ticketCategoriesCount: await dbManager.getTicketCategoriesCount(guildId)
     };
 
     return res.json(stats);
@@ -1087,7 +1096,7 @@ app.get('/api/tickets/:guildId/transcript/:ticketId', requireAuth, requireGuildA
 // Tickets endpoints
 app.post('/api/tickets', requireAuth, async (req: Request, res: Response) => {
   try {
-    const { userId, username, reason, guildId, channelId } = req.body;
+    const { userId, username, reason, guildId, channelId, categoryId } = req.body;
 
     if (!userId || !username || !reason || !guildId) {
       return res.status(400).json({ error: 'Missing required fields' });
@@ -1098,7 +1107,8 @@ app.post('/api/tickets', requireAuth, async (req: Request, res: Response) => {
       username,
       reason,
       channelId: channelId || null,
-      guildId
+      guildId,
+      categoryId: categoryId || null
     });
     return res.json({ id: ticketId, success: true });
   } catch (error) {
@@ -1222,6 +1232,118 @@ app.delete('/api/autoresponses/:guildId/:trigger', requireAuth, requireGuildAcce
     return res.json({ success: true });
   } catch (error) {
     console.error('Delete auto response error:', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Ticket Categories endpoints
+app.get('/api/ticket-categories/:guildId', requireAuth, requireGuildAccess, async (req: Request, res: Response) => {
+  try {
+    const { guildId } = req.params;
+    const { includeInactive } = req.query;
+    
+    if (!validateGuildId(guildId)) {
+      return res.status(400).json({ error: 'Valid Guild ID is required' });
+    }
+
+    const activeOnly = includeInactive !== 'true';
+    const categories = await dbManager.getTicketCategories(guildId, activeOnly);
+    return res.json(categories);
+  } catch (error) {
+    console.error('Get ticket categories error:', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.post('/api/ticket-categories/:guildId', requireAuth, requireGuildAccess, async (req: Request, res: Response) => {
+  try {
+    const { guildId } = req.params;
+    const { name, description, emoji, color, sortOrder } = req.body;
+    
+    if (!validateGuildId(guildId)) {
+      return res.status(400).json({ error: 'Valid Guild ID is required' });
+    }
+
+    if (!name) {
+      return res.status(400).json({ error: 'Category name is required' });
+    }
+
+    const categoryId = await dbManager.createTicketCategory({
+      guildId,
+      name,
+      description,
+      emoji,
+      color,
+      sortOrder
+    });
+
+    return res.json({ id: categoryId, success: true });
+  } catch (error: any) {
+    console.error('Create ticket category error:', error);
+    if (error.code === '23505') { // Unique constraint violation
+      return res.status(409).json({ error: 'A category with this name already exists' });
+    }
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.put('/api/ticket-categories/:guildId/:categoryId', requireAuth, requireGuildAccess, async (req: Request, res: Response) => {
+  try {
+    const { guildId, categoryId } = req.params;
+    const { name, description, emoji, color, isActive, sortOrder } = req.body;
+    
+    if (!validateGuildId(guildId)) {
+      return res.status(400).json({ error: 'Valid Guild ID is required' });
+    }
+
+    if (!categoryId || isNaN(parseInt(categoryId))) {
+      return res.status(400).json({ error: 'Valid Category ID is required' });
+    }
+
+    const result = await dbManager.updateTicketCategory(parseInt(categoryId), guildId, {
+      name,
+      description,
+      emoji,
+      color,
+      isActive,
+      sortOrder
+    });
+
+    if (result === 0) {
+      return res.status(404).json({ error: 'Category not found' });
+    }
+
+    return res.json({ success: true });
+  } catch (error: any) {
+    console.error('Update ticket category error:', error);
+    if (error.code === '23505') { // Unique constraint violation
+      return res.status(409).json({ error: 'A category with this name already exists' });
+    }
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.delete('/api/ticket-categories/:guildId/:categoryId', requireAuth, requireGuildAccess, async (req: Request, res: Response) => {
+  try {
+    const { guildId, categoryId } = req.params;
+    
+    if (!validateGuildId(guildId)) {
+      return res.status(400).json({ error: 'Valid Guild ID is required' });
+    }
+
+    if (!categoryId || isNaN(parseInt(categoryId))) {
+      return res.status(400).json({ error: 'Valid Category ID is required' });
+    }
+
+    const result = await dbManager.deleteTicketCategory(parseInt(categoryId), guildId);
+
+    if (result === 0) {
+      return res.status(404).json({ error: 'Category not found' });
+    }
+
+    return res.json({ success: true });
+  } catch (error) {
+    console.error('Delete ticket category error:', error);
     return res.status(500).json({ error: 'Internal server error' });
   }
 });
