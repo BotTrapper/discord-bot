@@ -1443,7 +1443,9 @@ app.get(
         } catch (fetchError) {
           console.warn(
             "[DEBUG] Could not fetch members:",
-            fetchError instanceof Error ? fetchError.message : String(fetchError),
+            fetchError instanceof Error
+              ? fetchError.message
+              : String(fetchError),
           );
           // Continue with whatever we have in cache
         }
