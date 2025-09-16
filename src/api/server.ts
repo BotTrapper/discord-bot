@@ -611,41 +611,51 @@ app.get(
 // Generate admin session token for guild access
 app.post(
   "/api/admin/session/:guildId",
-  requireAuth,
-  requireGlobalAdmin,
   async (req: Request, res: Response) => {
-    const { guildId } = req.params;
-    const user = req.user as CustomUser;
-    const adminLevel = (user as any).adminLevel || 3; // Default to level 3
-
+    console.log(`🔑 Admin session endpoint hit - Guild: ${req.params.guildId}`);
+    console.log(`🔑 Headers:`, req.headers.authorization ? 'Authorization header present' : 'No authorization header');
+    
+    // Manual auth check first
+    const authHeader = req.headers.authorization;
+    if (!authHeader?.startsWith('Bearer ')) {
+      console.log(`❌ No valid authorization header`);
+      return res.status(401).json({ error: 'No authorization header' });
+    }
+    
+    const token = authHeader.substring(7);
     try {
-      if (!guildId) {
-        return res.status(400).json({ error: "Guild ID is required" });
+      const decoded = jwtVerify(token, JWT_SECRET) as { userId: string };
+      console.log(`🔑 JWT decoded userId: ${decoded.userId}`);
+      
+      // Check admin status
+      const adminStatus = await dbManager.isGlobalAdmin(decoded.userId);
+      console.log(`🔑 Admin status:`, adminStatus);
+      
+      if (!adminStatus.isAdmin) {
+        return res.status(403).json({ error: 'Not a global admin' });
       }
-
+      
+      // Generate session token
       const sessionToken = generateAdminSessionToken(
-        user.id,
-        guildId,
-        adminLevel,
+        decoded.userId,
+        req.params.guildId!,
+        adminStatus.level,
       );
-
-      console.log(
-        `🔑 Generated admin session token for ${user.username} (${user.id}) on guild ${guildId}`,
-      );
-
+      
+      console.log(`🔑 Generated session token successfully`);
+      
       return res.json({
         sessionToken,
-        guildId,
-        adminLevel,
+        guildId: req.params.guildId,
+        adminLevel: adminStatus.level,
         expiresAt: Date.now() + 24 * 60 * 60 * 1000,
       });
+      
     } catch (error) {
-      console.error("Generate admin session error:", error);
-      return res
-        .status(500)
-        .json({ error: "Failed to generate admin session" });
+      console.log(`❌ JWT verification failed:`, error);
+      return res.status(401).json({ error: 'Invalid token' });
     }
-  },
+  }
 );
 
 // Validate admin session token
