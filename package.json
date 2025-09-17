@@ -18,7 +18,7 @@
     "test:unit": "echo '✅ Unit tests passed (placeholder)'",
     "test:integration": "echo '✅ Integration tests passed (placeholder)'",
     "test:docker": "docker build -t discord-bot:test . && docker run --rm discord-bot:test node --version",
-    "lint": "npx prettier --check \"src/**/*.{ts,tsx,css,json}\" --write",
+    "lint": "eslint . && npx prettier --check \"src/**/*.{ts,tsx,css,json}\" --write",
     "security-check": "npm audit --audit-level moderate",
     "db:setup": "docker-compose -f docker-compose.postgres.yml up -d",
     "db:migrate": "tsx src/database/migration.ts",
