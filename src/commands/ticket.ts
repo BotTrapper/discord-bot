@@ -29,10 +29,41 @@ export const data = new SlashCommandBuilder()
       ),
   )
   .addSubcommand((subcommand) =>
-    subcommand.setName("close").setDescription("Close the current ticket"),
+    subcommand.setName("setup").setDescription("Setup ticket system"),
   )
   .addSubcommand((subcommand) =>
-    subcommand.setName("setup").setDescription("Setup ticket system"),
+    subcommand
+      .setName("add")
+      .setDescription("Add user or role to the current ticket")
+      .addUserOption((option) =>
+        option
+          .setName("user")
+          .setDescription("User to add to the ticket")
+          .setRequired(false),
+      )
+      .addRoleOption((option) =>
+        option
+          .setName("role")
+          .setDescription("Role to add to the ticket")
+          .setRequired(false),
+      ),
+  )
+  .addSubcommand((subcommand) =>
+    subcommand
+      .setName("remove")
+      .setDescription("Remove user or role from the current ticket")
+      .addUserOption((option) =>
+        option
+          .setName("user")
+          .setDescription("User to remove from the ticket")
+          .setRequired(false),
+      )
+      .addRoleOption((option) =>
+        option
+          .setName("role")
+          .setDescription("Role to remove from the ticket")
+          .setRequired(false),
+      ),
   )
   .setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels);
 
@@ -56,11 +87,14 @@ export async function execute(interaction: any) {
     case "create":
       await createTicketWithCategories(interaction);
       break;
-    case "close":
-      await closeTicket(interaction);
-      break;
     case "setup":
       await setupTicketSystem(interaction);
+      break;
+    case "add":
+      await addUserOrRoleToTicket(interaction);
+      break;
+    case "remove":
+      await removeUserOrRoleFromTicket(interaction);
       break;
   }
 }
@@ -411,6 +445,160 @@ async function setupTicketSystem(interaction: any) {
     console.error("Error setting up ticket system:", error);
     await interaction.editReply({
       content: "❌ Fehler beim Einrichten des Ticket-Systems.",
+    });
+  }
+}
+
+async function addUserOrRoleToTicket(interaction: any) {
+  const channel = interaction.channel;
+  const user = interaction.options.getUser("user");
+  const role = interaction.options.getRole("role");
+
+  // Check if this is a ticket channel
+  if (!channel.name.startsWith("ticket-")) {
+    await interaction.reply({
+      content: "❌ Dieser Befehl kann nur in Ticket-Kanälen verwendet werden.",
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  // Check if at least one option is provided
+  if (!user && !role) {
+    await interaction.reply({
+      content: "❌ Du musst entweder einen User oder eine Rolle auswählen.",
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  await interaction.deferReply();
+
+  try {
+    const addedEntities = [];
+
+    // Add user permissions
+    if (user) {
+      await channel.permissionOverwrites.create(user.id, {
+        ViewChannel: true,
+        SendMessages: true,
+        ReadMessageHistory: true,
+      });
+      addedEntities.push(`<@${user.id}>`);
+    }
+
+    // Add role permissions
+    if (role) {
+      await channel.permissionOverwrites.create(role.id, {
+        ViewChannel: true,
+        SendMessages: true,
+        ReadMessageHistory: true,
+      });
+      addedEntities.push(`<@&${role.id}>`);
+    }
+
+    const embed = new EmbedBuilder()
+      .setTitle("✅ Berechtigung hinzugefügt")
+      .setDescription(
+        `${addedEntities.join(" und ")} ${addedEntities.length === 1 ? "wurde" : "wurden"} zum Ticket hinzugefügt.`,
+      )
+      .setColor(0x57f287)
+      .setTimestamp()
+      .setFooter({
+        text: `Hinzugefügt von ${interaction.user.username}`,
+        iconURL: interaction.user.displayAvatarURL(),
+      });
+
+    await interaction.editReply({
+      embeds: [embed],
+    });
+
+    console.log(
+      `✅ Added ${addedEntities.join(" and ")} to ticket ${channel.name} by ${interaction.user.username}`,
+    );
+  } catch (error) {
+    console.error("Error adding user/role to ticket:", error);
+    await interaction.editReply({
+      content: "❌ Fehler beim Hinzufügen der Berechtigung zum Ticket.",
+    });
+  }
+}
+
+async function removeUserOrRoleFromTicket(interaction: any) {
+  const channel = interaction.channel;
+  const user = interaction.options.getUser("user");
+  const role = interaction.options.getRole("role");
+
+  // Check if this is a ticket channel
+  if (!channel.name.startsWith("ticket-")) {
+    await interaction.reply({
+      content: "❌ Dieser Befehl kann nur in Ticket-Kanälen verwendet werden.",
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  // Check if at least one option is provided
+  if (!user && !role) {
+    await interaction.reply({
+      content: "❌ Du musst entweder einen User oder eine Rolle auswählen.",
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  await interaction.deferReply();
+
+  try {
+    const removedEntities = [];
+
+    // Remove user permissions
+    if (user) {
+      // Don't remove the ticket creator's permissions
+      const tickets = await dbManager.getTickets(interaction.guild.id);
+      const ticket = tickets.find((t: any) => t.channel_id === channel.id);
+
+      if (ticket && ticket.user_id === user.id) {
+        await interaction.editReply({
+          content:
+            "❌ Du kannst den Ticket-Ersteller nicht aus seinem eigenen Ticket entfernen.",
+        });
+        return;
+      }
+
+      await channel.permissionOverwrites.delete(user.id);
+      removedEntities.push(`<@${user.id}>`);
+    }
+
+    // Remove role permissions
+    if (role) {
+      await channel.permissionOverwrites.delete(role.id);
+      removedEntities.push(`<@&${role.id}>`);
+    }
+
+    const embed = new EmbedBuilder()
+      .setTitle("✅ Berechtigung entfernt")
+      .setDescription(
+        `${removedEntities.join(" und ")} ${removedEntities.length === 1 ? "wurde" : "wurden"} aus dem Ticket entfernt.`,
+      )
+      .setColor(0xed4245)
+      .setTimestamp()
+      .setFooter({
+        text: `Entfernt von ${interaction.user.username}`,
+        iconURL: interaction.user.displayAvatarURL(),
+      });
+
+    await interaction.editReply({
+      embeds: [embed],
+    });
+
+    console.log(
+      `✅ Removed ${removedEntities.join(" and ")} from ticket ${channel.name} by ${interaction.user.username}`,
+    );
+  } catch (error) {
+    console.error("Error removing user/role from ticket:", error);
+    await interaction.editReply({
+      content: "❌ Fehler beim Entfernen der Berechtigung aus dem Ticket.",
     });
   }
 }

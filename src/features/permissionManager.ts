@@ -232,6 +232,36 @@ export class PermissionManager {
         return false;
       }
 
+      // Check for specific ticket subcommands in the command permissions
+      if (allowed.includes("ticket") || denied.includes("ticket")) {
+        // Use the main ticket command permission for general cases
+        if (denied.includes("ticket")) {
+          return false;
+        }
+        if (allowed.includes("ticket")) {
+          return true;
+        }
+      }
+
+      // Check for specific ticket subcommand permissions
+      const subcommand = interaction.options.getSubcommand();
+      const specificPermission = `ticket.${subcommand}`;
+
+      if (denied.includes(specificPermission)) {
+        return false;
+      }
+      if (allowed.includes(specificPermission)) {
+        return true;
+      }
+
+      // Check for tickets.add_users and tickets.remove_users permissions
+      if (subcommand === "add" && allowed.includes("tickets.add_users")) {
+        return true;
+      }
+      if (subcommand === "remove" && allowed.includes("tickets.remove_users")) {
+        return true;
+      }
+
       // If command is explicitly allowed, grant access
       if (allowed.includes(commandName)) {
         return true;
@@ -247,6 +277,10 @@ export class PermissionManager {
         const subcommand = interaction.options.getSubcommand();
         if (subcommand === "create") {
           return true; // Everyone can create tickets
+        }
+        if (subcommand === "add" || subcommand === "remove") {
+          // For adding/removing users from tickets, require ticket management permissions
+          return await this.hasPermission(interaction, "canManageTickets");
         }
         return await this.hasPermission(interaction, "canManageTickets");
 

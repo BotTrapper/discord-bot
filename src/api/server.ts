@@ -1186,6 +1186,8 @@ app.get(
             "dashboard.view",
             "tickets.manage",
             "tickets.view",
+            "tickets.add_users",
+            "tickets.remove_users",
             "autoresponse.manage",
             "autoresponse.view",
           ],
@@ -1274,6 +1276,7 @@ app.get(
   async (req: Request, res: Response) => {
     try {
       const { guildId } = req.params;
+      const { assignableOnly } = req.query;
 
       console.log(`[DEBUG] Fetching roles for guild ${guildId}`);
 
@@ -1295,7 +1298,18 @@ app.get(
         `[DEBUG] Guild found: ${guild.name}, total roles: ${guild.roles.cache.size}`,
       );
 
-      const roles = guild.roles.cache
+      // Get bot's member to check role hierarchy
+      const botMember = guild.members.cache.get(discordClient.user?.id || "");
+      let botHighestRolePosition = 0;
+
+      if (botMember) {
+        botHighestRolePosition = botMember.roles.highest.position;
+        console.log(
+          `[DEBUG] Bot's highest role position: ${botHighestRolePosition}`,
+        );
+      }
+
+      let roles = guild.roles.cache
         .filter((role) => role.name !== "@everyone" && !role.managed)
         .map((role) => ({
           id: role.id,
@@ -1303,14 +1317,34 @@ app.get(
           color: role.color,
           position: role.position,
           managed: role.managed,
+          assignable: botMember
+            ? role.position < botHighestRolePosition
+            : false,
         }))
         .sort((a, b) => b.position - a.position);
 
-      console.log(`[DEBUG] Filtered roles count: ${roles.length}`);
+      // If assignableOnly=true, filter to only show roles the bot can assign
+      if (assignableOnly === "true" && botMember) {
+        roles = roles.filter((role) => role.assignable);
+        console.log(
+          `[DEBUG] Filtered to assignable roles count: ${roles.length}`,
+        );
+      } else {
+        console.log(`[DEBUG] All filtered roles count: ${roles.length}`);
+      }
 
-      return res.json(roles);
+      return res.json({
+        roles,
+        botInfo: botMember
+          ? {
+              hasManageRoles: botMember.permissions.has("ManageRoles"),
+              highestRolePosition: botHighestRolePosition,
+              highestRoleName: botMember.roles.highest.name,
+            }
+          : null,
+      });
     } catch (error) {
-      console.error("Get guild roles error:", error);
+      console.error("Fetch Discord roles error:", error);
       return res.status(500).json({ error: "Internal server error" });
     }
   },
@@ -2325,11 +2359,39 @@ app.get(
         const availableCommands = [
           {
             name: "ticket",
-            description: "Ticket-System verwalten (create, close, setup)",
+            description: "Ticket-System verwalten (create, setup, add, remove)",
+          },
+          {
+            name: "ticket.create",
+            description: "Neues Ticket erstellen",
+          },
+          {
+            name: "ticket.setup",
+            description: "Ticket-System einrichten",
+          },
+          {
+            name: "ticket.add",
+            description: "User/Rolle zu Ticket hinzufügen",
+          },
+          {
+            name: "ticket.remove",
+            description: "User/Rolle aus Ticket entfernen",
           },
           {
             name: "autoresponse",
             description: "Auto-Antworten konfigurieren (add, remove, list)",
+          },
+          {
+            name: "autoresponse.add",
+            description: "Neue Auto-Response erstellen",
+          },
+          {
+            name: "autoresponse.remove",
+            description: "Auto-Response löschen",
+          },
+          {
+            name: "autoresponse.list",
+            description: "Alle Auto-Responses anzeigen",
           },
           {
             name: "stats",
@@ -2339,6 +2401,18 @@ app.get(
           {
             name: "autorole",
             description: "Auto-Rollen verwalten (add, remove, list, toggle)",
+          },
+          {
+            name: "autorole.add",
+            description: "Neue Auto-Rolle hinzufügen",
+          },
+          {
+            name: "autorole.remove",
+            description: "Auto-Rolle entfernen",
+          },
+          {
+            name: "autorole.list",
+            description: "Alle Auto-Rollen anzeigen",
           },
           { name: "embed", description: "Embed-Nachrichten erstellen" },
           { name: "changelog", description: "Bot-Changelog anzeigen" },
@@ -2360,11 +2434,39 @@ app.get(
       const availableCommands = [
         {
           name: "ticket",
-          description: "Ticket-System verwalten (create, close, setup)",
+          description: "Ticket-System verwalten (create, setup, add, remove)",
+        },
+        {
+          name: "ticket.create",
+          description: "Neues Ticket erstellen",
+        },
+        {
+          name: "ticket.setup",
+          description: "Ticket-System einrichten",
+        },
+        {
+          name: "ticket.add",
+          description: "User/Rolle zu Ticket hinzufügen",
+        },
+        {
+          name: "ticket.remove",
+          description: "User/Rolle aus Ticket entfernen",
         },
         {
           name: "autoresponse",
           description: "Auto-Antworten konfigurieren (add, remove, list)",
+        },
+        {
+          name: "autoresponse.add",
+          description: "Neue Auto-Response erstellen",
+        },
+        {
+          name: "autoresponse.remove",
+          description: "Auto-Response löschen",
+        },
+        {
+          name: "autoresponse.list",
+          description: "Alle Auto-Responses anzeigen",
         },
         {
           name: "stats",
@@ -2374,10 +2476,146 @@ app.get(
           name: "autorole",
           description: "Auto-Rollen verwalten (add, remove, list, toggle)",
         },
+        {
+          name: "autorole.add",
+          description: "Neue Auto-Rolle hinzufügen",
+        },
+        {
+          name: "autorole.remove",
+          description: "Auto-Rolle entfernen",
+        },
+        {
+          name: "autorole.list",
+          description: "Alle Auto-Rollen anzeigen",
+        },
         { name: "embed", description: "Embed-Nachrichten erstellen" },
         { name: "changelog", description: "Bot-Changelog anzeigen" },
       ];
       return res.json(availableCommands);
+    }
+  },
+);
+
+// Feature Management API Endpoints
+app.get(
+  "/api/guilds/:guildId/features",
+  requireAuth,
+  requireGuildAccess,
+  async (req: Request, res: Response) => {
+    try {
+      const guildId = req.params.guildId as string;
+
+      if (!guildId) {
+        return res.status(400).json({ error: "Guild ID is required" });
+      }
+
+      // Get all available features with their status
+      const availableFeatures = [
+        {
+          name: "autoroles",
+          displayName: "Auto-Rollen",
+          description: "Automatische Rollenzuweisung für neue Mitglieder",
+        },
+        {
+          name: "tickets",
+          displayName: "Ticket-System",
+          description: "Support-Ticket System mit Kategorien",
+        },
+        {
+          name: "autoresponses",
+          displayName: "Auto-Antworten",
+          description: "Automatische Antworten auf Nachrichten",
+        },
+        {
+          name: "statistics",
+          displayName: "Statistiken",
+          description: "Bot-Nutzungsstatistiken und Metriken",
+        },
+      ];
+
+      // Check status for each feature
+      const featuresWithStatus = await Promise.all(
+        availableFeatures.map(async (feature) => {
+          const isEnabled = await featureManager.isFeatureEnabled(
+            guildId,
+            feature.name as FeatureName,
+          );
+          return {
+            ...feature,
+            enabled: isEnabled,
+          };
+        }),
+      );
+
+      return res.json(featuresWithStatus);
+    } catch (error) {
+      console.error("Get guild features error:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  },
+);
+
+app.put(
+  "/api/guilds/:guildId/features/:featureName",
+  requireAuth,
+  requireGuildAccess,
+  async (req: Request, res: Response) => {
+    try {
+      const guildId = req.params.guildId as string;
+      const featureName = req.params.featureName as string;
+      const { enabled } = req.body;
+
+      if (!guildId || !featureName) {
+        return res
+          .status(400)
+          .json({ error: "Guild ID and feature name are required" });
+      }
+
+      if (typeof enabled !== "boolean") {
+        return res.status(400).json({ error: "enabled must be a boolean" });
+      }
+
+      // Validate feature name
+      const validFeatures = [
+        "autoroles",
+        "tickets",
+        "autoresponses",
+        "statistics",
+      ];
+      if (!validFeatures.includes(featureName)) {
+        return res.status(400).json({ error: "Invalid feature name" });
+      }
+
+      console.log(
+        `🔧 ${enabled ? "Enabling" : "Disabling"} feature '${featureName}' for guild ${guildId}`,
+      );
+
+      // Update feature status
+      await featureManager.setFeatureEnabled(
+        guildId,
+        featureName as FeatureName,
+        enabled,
+      );
+
+      // If we have the registerGuildCommands function, update command registration
+      if (registerGuildCommandsFunction) {
+        console.log(
+          `🔄 Updating commands for guild ${guildId} due to feature change...`,
+        );
+        await registerGuildCommandsFunction(guildId);
+      }
+
+      console.log(
+        `✅ Feature '${featureName}' ${enabled ? "enabled" : "disabled"} for guild ${guildId}`,
+      );
+
+      return res.json({
+        success: true,
+        message: `Feature ${featureName} ${enabled ? "enabled" : "disabled"}`,
+      });
+    } catch (error) {
+      console.error("Update feature error:", error);
+      return res.status(500).json({ error: "Internal server error" });
     }
   },
 );
@@ -2549,6 +2787,376 @@ app.get("/api/changelog/markdown", (req: Request, res: Response) => {
 app.get("/api/health", (req: Request, res: Response) => {
   res.json({ status: "OK", timestamp: new Date().toISOString() });
 });
+
+// === NOTIFICATION SYSTEM API ENDPOINTS ===
+
+// Get notification settings for a guild
+app.get(
+  "/api/notifications/:guildId/settings",
+  requireAuth,
+  requireGuildAccess,
+  async (req: Request, res: Response) => {
+    try {
+      const { guildId } = req.params;
+
+      if (!guildId) {
+        return res.status(400).json({ error: "Guild ID is required" });
+      }
+
+      const settings = await dbManager.getNotificationSettings(guildId);
+      if (!settings) {
+        return res.json({
+          configured: false,
+          notificationCategoryId: null,
+          infoChannelId: null,
+          notificationRoles: [],
+        });
+      }
+
+      return res.json({
+        configured: true,
+        ...settings,
+      });
+    } catch (error) {
+      console.error("Get notification settings error:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  },
+);
+
+// Update notification settings (general)
+app.put(
+  "/api/notifications/:guildId/settings",
+  requireAuth,
+  requireGuildAccess,
+  async (req: Request, res: Response) => {
+    try {
+      const { guildId } = req.params;
+      const updates = req.body;
+
+      if (!guildId) {
+        return res.status(400).json({ error: "Guild ID is required" });
+      }
+
+      // Get current settings
+      const currentSettings = await dbManager.getNotificationSettings(guildId);
+      if (!currentSettings) {
+        return res
+          .status(404)
+          .json({ error: "Notification system not configured" });
+      }
+
+      // Handle different update types
+      if ("notificationRoles" in updates) {
+        const { notificationRoles } = updates;
+
+        if (!Array.isArray(notificationRoles)) {
+          return res
+            .status(400)
+            .json({ error: "notificationRoles must be an array" });
+        }
+
+        // Update database
+        const success = await dbManager.updateNotificationSettings(
+          guildId,
+          currentSettings.notificationCategoryId,
+          currentSettings.infoChannelId,
+          notificationRoles,
+          currentSettings.notificationsEnabled,
+        );
+
+        if (!success) {
+          return res.status(500).json({ error: "Failed to update settings" });
+        }
+
+        // Update Discord channel permissions
+        const { notificationManager } = await import(
+          "../features/notificationManager.js"
+        );
+        await notificationManager.updateChannelPermissions(
+          guildId,
+          notificationRoles,
+        );
+      }
+
+      if ("notificationsEnabled" in updates) {
+        const { notificationsEnabled } = updates;
+
+        if (typeof notificationsEnabled !== "boolean") {
+          return res
+            .status(400)
+            .json({ error: "notificationsEnabled must be a boolean" });
+        }
+
+        // Update database
+        const success = await dbManager.updateNotificationSettings(
+          guildId,
+          currentSettings.notificationCategoryId,
+          currentSettings.infoChannelId,
+          currentSettings.notificationRoles,
+          notificationsEnabled,
+        );
+
+        if (!success) {
+          return res.status(500).json({ error: "Failed to update settings" });
+        }
+      }
+
+      // Return updated settings
+      const updatedSettings = await dbManager.getNotificationSettings(guildId);
+      return res.json({
+        configured: true,
+        ...updatedSettings,
+      });
+    } catch (error) {
+      console.error("Update notification settings error:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  },
+);
+
+// Update notification role settings (legacy endpoint)
+app.put(
+  "/api/notifications/:guildId/roles",
+  requireAuth,
+  requireGuildAccess,
+  async (req: Request, res: Response) => {
+    try {
+      const { guildId } = req.params;
+      const { roleIds } = req.body;
+
+      if (!guildId) {
+        return res.status(400).json({ error: "Guild ID is required" });
+      }
+
+      if (!Array.isArray(roleIds)) {
+        return res.status(400).json({ error: "roleIds must be an array" });
+      }
+
+      // Get current settings
+      const currentSettings = await dbManager.getNotificationSettings(guildId);
+      if (!currentSettings) {
+        return res
+          .status(404)
+          .json({ error: "Notification system not configured" });
+      }
+
+      // Update database
+      const success = await dbManager.updateNotificationSettings(
+        guildId,
+        currentSettings.notificationCategoryId,
+        currentSettings.infoChannelId,
+        roleIds,
+        currentSettings.notificationsEnabled,
+      );
+
+      if (!success) {
+        return res.status(500).json({ error: "Failed to update settings" });
+      }
+
+      // Update Discord channel permissions
+      const { notificationManager } = await import(
+        "../features/notificationManager.js"
+      );
+      await notificationManager.updateChannelPermissions(guildId, roleIds);
+
+      return res.json({ success: true, roleIds });
+    } catch (error) {
+      console.error("Update notification roles error:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  },
+);
+
+// Send test notification
+app.post(
+  "/api/notifications/:guildId/test",
+  requireAuth,
+  requireGuildAccess,
+  async (req: Request, res: Response) => {
+    try {
+      const { guildId } = req.params;
+      const { message } = req.body;
+
+      if (!guildId) {
+        return res.status(400).json({ error: "Guild ID is required" });
+      }
+
+      const { notificationManager } = await import(
+        "../features/notificationManager.js"
+      );
+      const success = await notificationManager.sendTestNotification(
+        guildId,
+        message || "Test notification from BotTrapper Dashboard",
+      );
+
+      if (!success) {
+        return res
+          .status(500)
+          .json({ error: "Failed to send test notification" });
+      }
+
+      return res.json({ success: true });
+    } catch (error) {
+      console.error("Send test notification error:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  },
+);
+
+// Manual version notification endpoint (for testing/admin use)
+app.post(
+  "/api/notifications/version",
+  requireAuth,
+  async (req: Request, res: Response) => {
+    try {
+      const { version, title, description, features, fixes, link } = req.body;
+
+      if (!version || !title || !description) {
+        return res.status(400).json({
+          error: "version, title, and description are required",
+        });
+      }
+
+      const { notificationManager } = await import(
+        "../features/notificationManager.js"
+      );
+      await notificationManager.sendVersionNotification({
+        version,
+        title,
+        description,
+        features: features || [],
+        fixes: fixes || [],
+        link: link || undefined,
+        color: 0x00ff00,
+      });
+
+      return res.json({ success: true, message: "Version notification sent" });
+    } catch (error) {
+      console.error("Send version notification error:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  },
+);
+
+// Setup notification system for guild (manual trigger)
+app.post(
+  "/api/notifications/:guildId/setup",
+  requireAuth,
+  requireGuildAccess,
+  async (req: Request, res: Response) => {
+    try {
+      const { guildId } = req.params;
+
+      if (!guildId) {
+        return res.status(400).json({ error: "Guild ID is required" });
+      }
+
+      if (!discordClient) {
+        return res.status(503).json({ error: "Discord client not available" });
+      }
+
+      // @ts-ignore
+      const guild = discordClient.guilds.cache.get(guildId);
+      if (!guild) {
+        return res.status(404).json({ error: "Guild not found" });
+      }
+
+      // Create notification system directly here (similar to setupNotificationSystem)
+      try {
+        console.log(`🔔 Setting up notification system for ${guild.name}...`);
+
+        // Check if notification system already exists
+        const existingSettings =
+          await dbManager.getNotificationSettings(guildId);
+        if (
+          existingSettings?.notificationCategoryId &&
+          existingSettings?.infoChannelId
+        ) {
+          const category = guild.channels.cache.get(
+            existingSettings.notificationCategoryId,
+          );
+          const channel = guild.channels.cache.get(
+            existingSettings.infoChannelId,
+          );
+
+          if (category && channel) {
+            return res.json({
+              success: true,
+              message: "Notification system already exists",
+              categoryId: existingSettings.notificationCategoryId,
+              channelId: existingSettings.infoChannelId,
+            });
+          }
+        }
+
+        // Create the BotTrapper category
+        const botCategory = await guild.channels.create({
+          name: "🤖 BotTrapper",
+          type: 4, // Category channel
+          permissionOverwrites: [
+            {
+              id: guild.roles.everyone.id,
+              deny: ["ViewChannel"],
+            },
+            {
+              id: guild.ownerId,
+              allow: ["ViewChannel", "ManageChannels"],
+            },
+          ],
+        });
+
+        // Create the info channel within the category
+        const infoChannel = await guild.channels.create({
+          name: "📢-bot-info",
+          type: 0, // Text channel
+          parent: botCategory.id,
+          topic:
+            "🔔 BotTrapper Updates und Ankündigungen | Configure visibility in Dashboard",
+          permissionOverwrites: [
+            {
+              id: guild.roles.everyone.id,
+              deny: ["ViewChannel"],
+            },
+            {
+              id: guild.ownerId,
+              allow: ["ViewChannel"],
+            },
+            {
+              id: discordClient.user?.id || "",
+              allow: ["ViewChannel", "SendMessages", "EmbedLinks"],
+            },
+          ],
+        });
+
+        // Save to database
+        await dbManager.initializeNotificationSystem(
+          guildId,
+          botCategory.id,
+          infoChannel.id,
+        );
+
+        return res.json({
+          success: true,
+          message: "Notification system setup completed",
+          categoryId: botCategory.id,
+          channelId: infoChannel.id,
+        });
+      } catch (setupError) {
+        console.error(
+          `❌ Error creating notification system for ${guild.name}:`,
+          setupError,
+        );
+        return res
+          .status(500)
+          .json({ error: "Failed to create notification system" });
+      }
+    } catch (error) {
+      console.error("Setup notification system error:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  },
+);
 
 export function startApiServer() {
   app.listen(PORT, () => {

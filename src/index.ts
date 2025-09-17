@@ -10,10 +10,13 @@ import {
   ButtonBuilder,
   ButtonStyle,
   MessageFlags,
+  ChannelType,
+  PermissionFlagsBits,
 } from "discord.js";
 import { AutoResponseFeature } from "./features/autoResponse.js";
 import { PermissionManager } from "./features/permissionManager.js";
 import { featureManager, type FeatureName } from "./features/featureManager.js";
+import { notificationManager } from "./features/notificationManager.js";
 import { dbManager } from "./database/database.js";
 import {
   initializeDatabase,
@@ -31,6 +34,7 @@ import * as autoresponseCommand from "./commands/autoresponse.js";
 import * as statsCommand from "./commands/stats.js";
 import * as changelogCommand from "./commands/changelog.js";
 import * as autoroleCommand from "./commands/autorole.js";
+import * as bottrapperCommand from "./commands/bottrapper.js";
 import "dotenv/config";
 
 // Function to safely convert hex color to Discord integer
@@ -73,6 +77,7 @@ commands.set(autoresponseCommand.data.name, autoresponseCommand);
 commands.set(statsCommand.data.name, statsCommand);
 commands.set(changelogCommand.data.name, changelogCommand);
 commands.set(autoroleCommand.data.name, autoroleCommand);
+commands.set(bottrapperCommand.data.name, bottrapperCommand);
 
 // Map commands to their required features
 const COMMAND_FEATURE_MAP: Record<string, string> = {
@@ -94,6 +99,8 @@ const commandsData = [
   autoresponseCommand.data.toJSON(),
   statsCommand.data.toJSON(),
   changelogCommand.data.toJSON(),
+  autoroleCommand.data.toJSON(),
+  bottrapperCommand.data.toJSON(),
 ];
 
 const rest = new REST({ version: "10" }).setToken(TOKEN);
@@ -160,14 +167,14 @@ async function registerGuildCommands(guildId: string) {
 // Initialize data from database for all guilds
 async function initializeGuildData() {
   try {
-    // Initialize database first
-    await initializeDatabase();
-
+    console.log("🔧 Initializing guild data...");
     const guilds = client.guilds.cache;
-    for (const [guildId] of guilds) {
-      // Initialize default data for guild
-      await initializeGuildDefaults(guildId);
+
+    for (const guild of guilds.values()) {
+      console.log(`🏛️  Initializing guild: ${guild.name} (${guild.id})`);
+      await initializeGuildDefaults(guild.id);
     }
+
     console.log("✅ Guild data initialized from database");
   } catch (error) {
     console.error("❌ Error initializing guild data:", error);
@@ -386,6 +393,9 @@ async function main() {
       // Verbinde den Discord Client mit dem API Server
       setDiscordClient(client);
 
+      // Set Discord client for notification manager
+      notificationManager.setDiscordClient(client);
+
       // Register the guild commands function with the API server
       setRegisterGuildCommandsFunction(registerGuildCommands);
 
@@ -395,17 +405,42 @@ async function main() {
       // Initialize guild data from database
       await initializeGuildData();
 
+      // Check and send automatic version notifications
+      setTimeout(async () => {
+        await notificationManager.checkAndSendVersionNotifications();
+      }, 5000); // Wait 5 seconds after startup to ensure everything is ready
+
       console.log("🚀 Bot is fully ready!");
     });
+
+    // Debug: Log member-related events (but don't duplicate guildMemberAdd)
+    client.on("guildMemberRemove", (member) => {
+      console.log(
+        `🔥 [EVENT] guildMemberRemove: ${member.user.username} left ${member.guild.name}`,
+      );
+    });
+
+    client.on("guildMemberUpdate", (oldMember, newMember) => {
+      console.log(
+        `🔥 [EVENT] guildMemberUpdate: ${newMember.user.username} updated in ${newMember.guild.name}`,
+      );
+    });
+
+    // Debug: General event logging for debugging
+    console.log("🔧 [DEBUG] Setting up event listeners...");
 
     // Handle new guilds
     client.on("guildCreate", async (guild) => {
       console.log(`🎉 Bot added to new guild: ${guild.name} (${guild.id})`);
 
-      // Initialize default data for new guild
-      await initializeGuildDefaults(guild.id);
+      try {
+        // Initialize default data for new guild
+        await initializeGuildDefaults(guild.id);
 
-      console.log(`✅ Guild ${guild.name} initialized`);
+        console.log(`✅ Guild ${guild.name} initialized`);
+      } catch (error) {
+        console.error(`❌ Error initializing guild ${guild.name}:`, error);
+      }
     });
 
     // Handle new members joining - Auto Role assignment
@@ -809,6 +844,10 @@ async function main() {
 
     // Login to Discord
     await client.login(TOKEN);
+
+    // Initialize notification manager with client
+    notificationManager.setDiscordClient(client);
+    console.log("🔔 Notification manager initialized");
   } catch (error) {
     console.error("❌ Failed to start bot:", error);
     process.exit(1);

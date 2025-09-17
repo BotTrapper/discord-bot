@@ -143,6 +143,83 @@ export class DatabaseManager {
         END $$;
       `);
 
+      // Add notification fields to guild_settings if they don't exist (migration for notification system)
+      await client.query(`
+        DO $$ 
+        BEGIN 
+          IF NOT EXISTS (
+            SELECT column_name 
+            FROM information_schema.columns 
+            WHERE table_name='guild_settings' AND column_name='notification_category_id'
+          ) THEN
+            ALTER TABLE guild_settings ADD COLUMN notification_category_id TEXT;
+          END IF;
+        END $$;
+      `);
+
+      await client.query(`
+        DO $$ 
+        BEGIN 
+          IF NOT EXISTS (
+            SELECT column_name 
+            FROM information_schema.columns 
+            WHERE table_name='guild_settings' AND column_name='info_channel_id'
+          ) THEN
+            ALTER TABLE guild_settings ADD COLUMN info_channel_id TEXT;
+          END IF;
+        END $$;
+      `);
+
+      await client.query(`
+        DO $$ 
+        BEGIN 
+          IF NOT EXISTS (
+            SELECT column_name 
+            FROM information_schema.columns 
+            WHERE table_name='guild_settings' AND column_name='notification_roles'
+          ) THEN
+            ALTER TABLE guild_settings ADD COLUMN notification_roles TEXT DEFAULT '[]'; -- JSON array of role IDs
+          END IF;
+        END $$;
+      `);
+
+      await client.query(`
+        DO $$ 
+        BEGIN 
+          IF NOT EXISTS (
+            SELECT column_name 
+            FROM information_schema.columns 
+            WHERE table_name='guild_settings' AND column_name='notifications_enabled'
+          ) THEN
+            ALTER TABLE guild_settings ADD COLUMN notifications_enabled BOOLEAN DEFAULT true;
+          END IF;
+        END $$;
+
+        -- Add notifications_setup_completed column
+        DO $$ 
+        BEGIN 
+          IF NOT EXISTS (
+            SELECT column_name 
+            FROM information_schema.columns 
+            WHERE table_name='guild_settings' AND column_name='notifications_setup_completed'
+          ) THEN
+            ALTER TABLE guild_settings ADD COLUMN notifications_setup_completed BOOLEAN DEFAULT false;
+          END IF;
+        END $$;
+
+        -- Add last_notification_version column
+        DO $$ 
+        BEGIN 
+          IF NOT EXISTS (
+            SELECT column_name 
+            FROM information_schema.columns 
+            WHERE table_name='guild_settings' AND column_name='last_notification_version'
+          ) THEN
+            ALTER TABLE guild_settings ADD COLUMN last_notification_version VARCHAR(20) DEFAULT NULL;
+          END IF;
+        END $$;
+      `);
+
       // Auto responses table
       await client.query(`
         CREATE TABLE IF NOT EXISTS auto_responses (
@@ -1652,6 +1729,166 @@ export class DatabaseManager {
         allowed: finalAllowed,
         denied: Array.from(deniedCommands),
       };
+    } finally {
+      client.release();
+    }
+  }
+
+  // === NOTIFICATION SYSTEM METHODS ===
+
+  // Get notification settings for a guild
+  async getNotificationSettings(guildId: string) {
+    const client = await this.pool.connect();
+    try {
+      const result = await client.query(
+        `SELECT notification_category_id, info_channel_id, notification_roles, notifications_enabled, last_notification_version, notifications_setup_completed 
+         FROM guild_settings WHERE guild_id = $1`,
+        [guildId],
+      );
+
+      const row = result.rows[0];
+      if (!row) return null;
+
+      return {
+        notificationCategoryId: row.notification_category_id,
+        infoChannelId: row.info_channel_id,
+        notificationRoles: JSON.parse(row.notification_roles || "[]"),
+        notificationsEnabled: row.notifications_enabled ?? true,
+        lastNotificationVersion: row.last_notification_version,
+        setupCompleted: row.notifications_setup_completed ?? false,
+      };
+    } finally {
+      client.release();
+    }
+  }
+
+  // Update notification settings for a guild
+  async updateNotificationSettings(
+    guildId: string,
+    categoryId: string | null,
+    channelId: string | null,
+    roleIds: string[] = [],
+    notificationsEnabled: boolean = true,
+    lastNotificationVersion?: string,
+  ) {
+    const client = await this.pool.connect();
+    try {
+      let query = `UPDATE guild_settings 
+         SET notification_category_id = $2, 
+             info_channel_id = $3, 
+             notification_roles = $4,
+             notifications_enabled = $5,
+             updated_at = CURRENT_TIMESTAMP`;
+
+      let params: any[] = [
+        guildId,
+        categoryId,
+        channelId,
+        JSON.stringify(roleIds),
+        notificationsEnabled,
+      ];
+
+      if (lastNotificationVersion !== undefined) {
+        query += `, last_notification_version = $6`;
+        params.push(lastNotificationVersion);
+      }
+
+      query += ` WHERE guild_id = $1`;
+
+      await client.query(query, params);
+      return true;
+    } catch (error) {
+      console.error("Error updating notification settings:", error);
+      return false;
+    } finally {
+      client.release();
+    }
+  }
+
+  // Create initial notification settings when guild is first set up
+  async initializeNotificationSystem(
+    guildId: string,
+    categoryId: string,
+    channelId: string,
+  ) {
+    const client = await this.pool.connect();
+    try {
+      // Update or insert notification settings
+      const result = await client.query(
+        `UPDATE guild_settings 
+         SET notification_category_id = $2, 
+             info_channel_id = $3,
+             notification_roles = '[]',
+             notifications_enabled = true,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE guild_id = $1`,
+        [guildId, categoryId, channelId],
+      );
+
+      // If no existing settings, create them
+      if (result.rowCount === 0) {
+        await client.query(
+          `INSERT INTO guild_settings 
+           (guild_id, enabled_features, settings, notification_category_id, info_channel_id, notification_roles, notifications_enabled) 
+           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          [
+            guildId,
+            JSON.stringify(["tickets", "autoresponses", "statistics"]),
+            JSON.stringify({}),
+            categoryId,
+            channelId,
+            JSON.stringify([]),
+            true,
+          ],
+        );
+      }
+      return true;
+    } catch (error) {
+      console.error("Error initializing notification system:", error);
+      return false;
+    } finally {
+      client.release();
+    }
+  }
+
+  // Get all guilds with notification channels for version announcements
+  async getAllNotificationChannels() {
+    const client = await this.pool.connect();
+    try {
+      const result = await client.query(
+        `SELECT guild_id, info_channel_id, notification_roles 
+         FROM guild_settings 
+         WHERE info_channel_id IS NOT NULL`,
+      );
+
+      return result.rows.map((row) => ({
+        guildId: row.guild_id,
+        channelId: row.info_channel_id,
+        allowedRoles: JSON.parse(row.notification_roles || "[]"),
+      }));
+    } finally {
+      client.release();
+    }
+  }
+
+  // Get guilds that need version notifications
+  async getGuildsNeedingVersionNotification(currentVersion: string) {
+    const client = await this.pool.connect();
+    try {
+      const result = await client.query(
+        `SELECT guild_id, info_channel_id, notification_roles, notifications_enabled
+         FROM guild_settings 
+         WHERE info_channel_id IS NOT NULL 
+         AND notifications_enabled = true
+         AND (last_notification_version IS NULL OR last_notification_version != $1)`,
+        [currentVersion],
+      );
+
+      return result.rows.map((row) => ({
+        guildId: row.guild_id,
+        channelId: row.info_channel_id,
+        allowedRoles: JSON.parse(row.notification_roles || "[]"),
+      }));
     } finally {
       client.release();
     }
