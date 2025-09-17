@@ -1,6 +1,10 @@
 import { dbManager } from "../database/database.js";
 
-export type FeatureName = "tickets" | "autoresponses" | "statistics";
+export type FeatureName =
+  | "tickets"
+  | "autoresponses"
+  | "statistics"
+  | "autoroles";
 
 export class FeatureManager {
   private static instance: FeatureManager;

@@ -289,6 +289,50 @@ export class DatabaseManager {
         )
       `);
 
+      // Ticket setup messages table for custom setup text
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS ticket_setup_messages (
+          id SERIAL PRIMARY KEY,
+          guild_id TEXT NOT NULL UNIQUE,
+          title TEXT DEFAULT '🎫 Ticket System',
+          description TEXT DEFAULT 'Wähle eine Kategorie aus, um ein neues Ticket zu erstellen:',
+          color INTEGER DEFAULT 5793522,
+          footer_text TEXT DEFAULT '',
+          is_custom BOOLEAN DEFAULT FALSE,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+
+      // Auto roles table for automatic role assignment on member join
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS auto_roles (
+          id SERIAL PRIMARY KEY,
+          guild_id TEXT NOT NULL,
+          role_id TEXT NOT NULL,
+          role_name TEXT NOT NULL,
+          is_active BOOLEAN DEFAULT TRUE,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(guild_id, role_id)
+        )
+      `);
+
+      // Command permissions table for granular command access control per role
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS command_permissions (
+          id SERIAL PRIMARY KEY,
+          guild_id TEXT NOT NULL,
+          role_id TEXT NOT NULL,
+          role_name TEXT NOT NULL,
+          allowed_commands TEXT DEFAULT '[]', -- JSON array of command names
+          denied_commands TEXT DEFAULT '[]', -- JSON array of command names (explicit deny)
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(guild_id, role_id)
+        )
+      `);
+
       // Create indexes for better performance
       await client.query(
         "CREATE INDEX IF NOT EXISTS idx_tickets_guild_id ON tickets(guild_id)",
@@ -331,6 +375,18 @@ export class DatabaseManager {
       );
       await client.query(
         "CREATE INDEX IF NOT EXISTS idx_ticket_categories_active ON ticket_categories(guild_id, is_active)",
+      );
+      await client.query(
+        "CREATE INDEX IF NOT EXISTS idx_auto_roles_guild_id ON auto_roles(guild_id)",
+      );
+      await client.query(
+        "CREATE INDEX IF NOT EXISTS idx_auto_roles_active ON auto_roles(guild_id, is_active)",
+      );
+      await client.query(
+        "CREATE INDEX IF NOT EXISTS idx_command_permissions_guild_id ON command_permissions(guild_id)",
+      );
+      await client.query(
+        "CREATE INDEX IF NOT EXISTS idx_command_permissions_role_id ON command_permissions(guild_id, role_id)",
       );
 
       console.log("✅ Database tables initialized");
@@ -1278,6 +1334,324 @@ export class DatabaseManager {
         [guildId],
       );
       return parseInt(result.rows[0].count);
+    } finally {
+      client.release();
+    }
+  }
+
+  // Ticket Setup Message methods
+  async getTicketSetupMessage(guildId: string) {
+    const client = await this.pool.connect();
+    try {
+      const result = await client.query(
+        `SELECT * FROM ticket_setup_messages WHERE guild_id = $1`,
+        [guildId],
+      );
+
+      if (result.rows[0]) {
+        return result.rows[0];
+      }
+
+      // If no custom message exists, return default
+      return {
+        guild_id: guildId,
+        title: "🎫 Ticket System",
+        description:
+          "Wähle eine Kategorie aus, um ein neues Ticket zu erstellen:",
+        color: 5793522, // Discord blurple
+        footer_text: "",
+        is_custom: false,
+      };
+    } finally {
+      client.release();
+    }
+  }
+
+  async updateTicketSetupMessage(
+    guildId: string,
+    messageData: {
+      title?: string;
+      description?: string;
+      color?: number;
+      footerText?: string;
+      isCustom?: boolean;
+    },
+  ) {
+    const client = await this.pool.connect();
+    try {
+      const result = await client.query(
+        `INSERT INTO ticket_setup_messages (guild_id, title, description, color, footer_text, is_custom) 
+         VALUES ($1, $2, $3, $4, $5, $6) 
+         ON CONFLICT (guild_id) 
+         DO UPDATE SET 
+           title = $2, 
+           description = $3, 
+           color = $4, 
+           footer_text = $5, 
+           is_custom = $6,
+           updated_at = CURRENT_TIMESTAMP
+         RETURNING id`,
+        [
+          guildId,
+          messageData.title || "🎫 Ticket System",
+          messageData.description ||
+            "Wähle eine Kategorie aus, um ein neues Ticket zu erstellen:",
+          messageData.color || 5793522,
+          messageData.footerText || "",
+          messageData.isCustom || false,
+        ],
+      );
+      return result.rows[0].id;
+    } finally {
+      client.release();
+    }
+  }
+
+  async resetTicketSetupMessage(guildId: string) {
+    const client = await this.pool.connect();
+    try {
+      const result = await client.query(
+        `DELETE FROM ticket_setup_messages WHERE guild_id = $1`,
+        [guildId],
+      );
+      return result.rowCount;
+    } finally {
+      client.release();
+    }
+  }
+
+  // Auto Role methods
+  async getAutoRoles(guildId: string) {
+    const client = await this.pool.connect();
+    try {
+      const result = await client.query(
+        `SELECT * FROM auto_roles WHERE guild_id = $1 ORDER BY created_at ASC`,
+        [guildId],
+      );
+      return result.rows;
+    } finally {
+      client.release();
+    }
+  }
+
+  async getActiveAutoRoles(guildId: string) {
+    const client = await this.pool.connect();
+    try {
+      const result = await client.query(
+        `SELECT * FROM auto_roles WHERE guild_id = $1 AND is_active = true ORDER BY created_at ASC`,
+        [guildId],
+      );
+      return result.rows;
+    } finally {
+      client.release();
+    }
+  }
+
+  async addAutoRole(guildId: string, roleId: string, roleName: string) {
+    const client = await this.pool.connect();
+    try {
+      const result = await client.query(
+        `INSERT INTO auto_roles (guild_id, role_id, role_name) VALUES ($1, $2, $3) RETURNING id`,
+        [guildId, roleId, roleName],
+      );
+      return result.rows[0].id;
+    } catch (error: any) {
+      if (error.code === "23505") {
+        // Unique constraint violation
+        throw new Error("Diese Rolle ist bereits als Auto-Role konfiguriert.");
+      }
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async updateAutoRole(
+    guildId: string,
+    roleId: string,
+    data: { roleName?: string; isActive?: boolean },
+  ) {
+    const client = await this.pool.connect();
+    try {
+      const updates: string[] = [];
+      const values: any[] = [guildId, roleId];
+      let paramCount = 2;
+
+      if (data.roleName !== undefined) {
+        updates.push(`role_name = $${++paramCount}`);
+        values.push(data.roleName);
+      }
+
+      if (data.isActive !== undefined) {
+        updates.push(`is_active = $${++paramCount}`);
+        values.push(data.isActive);
+      }
+
+      if (updates.length === 0) {
+        return 0;
+      }
+
+      updates.push(`updated_at = CURRENT_TIMESTAMP`);
+
+      const result = await client.query(
+        `UPDATE auto_roles SET ${updates.join(", ")} WHERE guild_id = $1 AND role_id = $2`,
+        values,
+      );
+      return result.rowCount;
+    } finally {
+      client.release();
+    }
+  }
+
+  async deleteAutoRole(guildId: string, roleId: string) {
+    const client = await this.pool.connect();
+    try {
+      const result = await client.query(
+        `DELETE FROM auto_roles WHERE guild_id = $1 AND role_id = $2`,
+        [guildId, roleId],
+      );
+      return result.rowCount;
+    } finally {
+      client.release();
+    }
+  }
+
+  async getAutoRolesCount(guildId: string) {
+    const client = await this.pool.connect();
+    try {
+      const result = await client.query(
+        `SELECT COUNT(*) as count FROM auto_roles WHERE guild_id = $1 AND is_active = true`,
+        [guildId],
+      );
+      return parseInt(result.rows[0].count);
+    } finally {
+      client.release();
+    }
+  }
+
+  // Command Permission methods
+  async getCommandPermissions(guildId: string) {
+    const client = await this.pool.connect();
+    try {
+      const result = await client.query(
+        `SELECT * FROM command_permissions WHERE guild_id = $1 ORDER BY role_name ASC`,
+        [guildId],
+      );
+      return result.rows.map((row) => ({
+        ...row,
+        allowed_commands: JSON.parse(row.allowed_commands || "[]"),
+        denied_commands: JSON.parse(row.denied_commands || "[]"),
+      }));
+    } finally {
+      client.release();
+    }
+  }
+
+  async getCommandPermissionForRole(guildId: string, roleId: string) {
+    const client = await this.pool.connect();
+    try {
+      const result = await client.query(
+        `SELECT * FROM command_permissions WHERE guild_id = $1 AND role_id = $2`,
+        [guildId, roleId],
+      );
+
+      if (result.rows[0]) {
+        return {
+          ...result.rows[0],
+          allowed_commands: JSON.parse(result.rows[0].allowed_commands || "[]"),
+          denied_commands: JSON.parse(result.rows[0].denied_commands || "[]"),
+        };
+      }
+
+      return null;
+    } finally {
+      client.release();
+    }
+  }
+
+  async updateCommandPermissions(
+    guildId: string,
+    roleId: string,
+    data: {
+      roleName: string;
+      allowedCommands: string[];
+      deniedCommands: string[];
+    },
+  ) {
+    const client = await this.pool.connect();
+    try {
+      const result = await client.query(
+        `INSERT INTO command_permissions (guild_id, role_id, role_name, allowed_commands, denied_commands) 
+         VALUES ($1, $2, $3, $4, $5) 
+         ON CONFLICT (guild_id, role_id) 
+         DO UPDATE SET 
+           role_name = $3,
+           allowed_commands = $4,
+           denied_commands = $5,
+           updated_at = CURRENT_TIMESTAMP
+         RETURNING id`,
+        [
+          guildId,
+          roleId,
+          data.roleName,
+          JSON.stringify(data.allowedCommands),
+          JSON.stringify(data.deniedCommands),
+        ],
+      );
+      return result.rows[0].id;
+    } finally {
+      client.release();
+    }
+  }
+
+  async deleteCommandPermissions(guildId: string, roleId: string) {
+    const client = await this.pool.connect();
+    try {
+      const result = await client.query(
+        `DELETE FROM command_permissions WHERE guild_id = $1 AND role_id = $2`,
+        [guildId, roleId],
+      );
+      return result.rowCount;
+    } finally {
+      client.release();
+    }
+  }
+
+  async getUserAllowedCommands(
+    guildId: string,
+    userId: string,
+    userRoles: string[],
+  ) {
+    const client = await this.pool.connect();
+    try {
+      // Get all command permissions for user's roles
+      const result = await client.query(
+        `SELECT allowed_commands, denied_commands FROM command_permissions 
+         WHERE guild_id = $1 AND role_id = ANY($2::text[])`,
+        [guildId, userRoles],
+      );
+
+      const allowedCommands = new Set<string>();
+      const deniedCommands = new Set<string>();
+
+      // Collect all allowed and denied commands from all roles
+      result.rows.forEach((row) => {
+        const allowed = JSON.parse(row.allowed_commands || "[]");
+        const denied = JSON.parse(row.denied_commands || "[]");
+
+        allowed.forEach((cmd: string) => allowedCommands.add(cmd));
+        denied.forEach((cmd: string) => deniedCommands.add(cmd));
+      });
+
+      // Denied commands take precedence over allowed commands
+      const finalAllowed = Array.from(allowedCommands).filter(
+        (cmd) => !deniedCommands.has(cmd),
+      );
+
+      return {
+        allowed: finalAllowed,
+        denied: Array.from(deniedCommands),
+      };
     } finally {
       client.release();
     }

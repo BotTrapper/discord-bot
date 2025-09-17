@@ -4,9 +4,10 @@ import { dbManager } from "../database/database.js";
 export interface UserPermissions {
   canManageTickets: boolean;
   canManageAutoResponses: boolean;
-  canManageWebhooks: boolean;
   canViewStats: boolean;
   canUseEmbedBuilder: boolean;
+  canManagePermissions: boolean;
+  canManageAutoRoles: boolean;
 }
 
 export class PermissionManager {
@@ -14,9 +15,10 @@ export class PermissionManager {
     return {
       canManageTickets: false,
       canManageAutoResponses: false,
-      canManageWebhooks: false,
       canViewStats: false,
       canUseEmbedBuilder: true,
+      canManagePermissions: false,
+      canManageAutoRoles: false,
     };
   }
 
@@ -24,9 +26,10 @@ export class PermissionManager {
     return {
       canManageTickets: true,
       canManageAutoResponses: false,
-      canManageWebhooks: false,
       canViewStats: true,
       canUseEmbedBuilder: true,
+      canManagePermissions: false,
+      canManageAutoRoles: false,
     };
   }
 
@@ -34,9 +37,10 @@ export class PermissionManager {
     return {
       canManageTickets: true,
       canManageAutoResponses: true,
-      canManageWebhooks: true,
       canViewStats: true,
       canUseEmbedBuilder: true,
+      canManagePermissions: true,
+      canManageAutoRoles: true,
     };
   }
 
@@ -102,6 +106,11 @@ export class PermissionManager {
 
     // Bot owner always has all permissions
     if (userId === interaction.client.application.owner?.id) {
+      return true;
+    }
+
+    // Server owner always has all permissions
+    if (interaction.guild?.ownerId === userId) {
       return true;
     }
 
@@ -187,6 +196,52 @@ export class PermissionManager {
     interaction: any,
     commandName: string,
   ): Promise<boolean> {
+    const guildId = interaction.guild?.id;
+    const userId = interaction.user.id;
+    const member = interaction.member;
+
+    if (!guildId || !member) {
+      return false;
+    }
+
+    // Server owners always have access
+    if (interaction.guild.ownerId === userId) {
+      return true;
+    }
+
+    // Global admins always have access
+    const { isAdmin } = await this.isGlobalAdmin(userId);
+    if (isAdmin) {
+      return true;
+    }
+
+    // Check role-based command permissions first
+    const userRoles = member.roles.cache
+      ? Array.from(member.roles.cache.keys())
+      : [];
+
+    try {
+      const { allowed, denied } = await dbManager.getUserAllowedCommands(
+        guildId,
+        userId,
+        userRoles as string[],
+      );
+
+      // If command is explicitly denied, block access
+      if (denied.includes(commandName)) {
+        return false;
+      }
+
+      // If command is explicitly allowed, grant access
+      if (allowed.includes(commandName)) {
+        return true;
+      }
+    } catch (error) {
+      console.error("Error checking command permissions:", error);
+      // Fall back to legacy permission system if command permissions fail
+    }
+
+    // Fall back to legacy permission-based system
     switch (commandName) {
       case "ticket":
         const subcommand = interaction.options.getSubcommand();
@@ -197,9 +252,6 @@ export class PermissionManager {
 
       case "autoresponse":
         return await this.hasPermission(interaction, "canManageAutoResponses");
-
-      case "webhook":
-        return await this.hasPermission(interaction, "canManageWebhooks");
 
       case "stats":
         return await this.hasPermission(interaction, "canViewStats");

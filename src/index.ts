@@ -30,7 +30,31 @@ import * as embedCommand from "./commands/embed.js";
 import * as autoresponseCommand from "./commands/autoresponse.js";
 import * as statsCommand from "./commands/stats.js";
 import * as changelogCommand from "./commands/changelog.js";
+import * as autoroleCommand from "./commands/autorole.js";
 import "dotenv/config";
+
+// Function to safely convert hex color to Discord integer
+function hexToDiscordColor(hexColor: string): number {
+  try {
+    // Remove # if present and ensure it's valid
+    const cleanHex = hexColor.replace("#", "").trim();
+
+    // Validate hex format (6 characters)
+    if (!/^[0-9A-Fa-f]{6}$/.test(cleanHex)) {
+      console.warn(
+        `Invalid hex color: ${hexColor}, using default Discord blurple`,
+      );
+      return 0x5865f2; // Discord blurple as fallback
+    }
+
+    const colorInt = parseInt(cleanHex, 16);
+    console.log(`Converting color ${hexColor} to Discord integer: ${colorInt}`);
+    return colorInt;
+  } catch (error) {
+    console.warn(`Error parsing color ${hexColor}:`, error);
+    return 0x5865f2; // Discord blurple as fallback
+  }
+}
 
 const client = new Client({
   intents: [
@@ -48,12 +72,14 @@ commands.set(embedCommand.data.name, embedCommand);
 commands.set(autoresponseCommand.data.name, autoresponseCommand);
 commands.set(statsCommand.data.name, statsCommand);
 commands.set(changelogCommand.data.name, changelogCommand);
+commands.set(autoroleCommand.data.name, autoroleCommand);
 
 // Map commands to their required features
 const COMMAND_FEATURE_MAP: Record<string, string> = {
   ticket: "tickets",
   autoresponse: "autoresponses",
   stats: "statistics",
+  autorole: "autoroles",
   // 'embed' is always available (no feature requirement)
   // 'changelog' is always available (no feature requirement)
 };
@@ -382,6 +408,65 @@ async function main() {
       console.log(`✅ Guild ${guild.name} initialized`);
     });
 
+    // Handle new members joining - Auto Role assignment
+    client.on("guildMemberAdd", async (member) => {
+      try {
+        // Check if autoroles feature is enabled for this guild
+        const isAutoRolesEnabled = await featureManager.isFeatureEnabled(
+          member.guild.id,
+          "autoroles",
+        );
+
+        if (!isAutoRolesEnabled) {
+          return;
+        }
+
+        // Get active auto roles for this guild
+        const autoRoles = await dbManager.getActiveAutoRoles(member.guild.id);
+
+        if (autoRoles.length === 0) {
+          return;
+        }
+
+        console.log(
+          `🎭 Assigning auto roles to ${member.user.username} in ${member.guild.name}`,
+        );
+
+        // Assign each active auto role to the new member
+        for (const autoRole of autoRoles) {
+          try {
+            const role = member.guild.roles.cache.get(autoRole.role_id);
+            if (role) {
+              await member.roles.add(role);
+              console.log(
+                `✅ Assigned role "${role.name}" to ${member.user.username}`,
+              );
+            } else {
+              console.warn(
+                `⚠️ Role with ID ${autoRole.role_id} not found in guild ${member.guild.name}`,
+              );
+              // Optionally mark role as inactive in database
+              await dbManager.updateAutoRole(
+                member.guild.id,
+                autoRole.role_id,
+                { isActive: false },
+              );
+            }
+          } catch (roleError) {
+            console.error(
+              `❌ Failed to assign role ${autoRole.role_name} to ${member.user.username}:`,
+              roleError,
+            );
+          }
+        }
+      } catch (error) {
+        console.error(
+          `❌ Auto role assignment failed for ${member.user.username}:`,
+          error,
+        );
+      }
+    });
+
     // Handle slash commands
     client.on("interactionCreate", async (interaction: Interaction) => {
       if (interaction.isChatInputCommand()) {
@@ -619,9 +704,7 @@ async function main() {
               .setDescription(
                 `Willkommen ${interaction.user}! Dein Ticket wurde erstellt.`,
               )
-              .setColor(
-                parseInt(category.color.replace("#", ""), 16) || 0x5865f2,
-              )
+              .setColor(hexToDiscordColor(category.color))
               .addFields([
                 { name: "Ticket ID", value: `#${ticketId}`, inline: true },
                 { name: "Kategorie", value: category.name, inline: true },

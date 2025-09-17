@@ -354,13 +354,20 @@ async function setupTicketSystem(interaction: any) {
       true,
     );
 
+    // Get custom setup message or use default
+    const setupMessage = await dbManager.getTicketSetupMessage(
+      interaction.guild.id,
+    );
+
     const embed = new EmbedBuilder()
-      .setTitle("🎫 Ticket System")
-      .setDescription(
-        "Wähle eine Kategorie aus, um ein neues Ticket zu erstellen:",
-      )
-      .setColor(0x5865f2)
+      .setTitle(setupMessage.title)
+      .setDescription(setupMessage.description)
+      .setColor(setupMessage.color || 0x5865f2)
       .setTimestamp();
+
+    if (setupMessage.footer_text) {
+      embed.setFooter({ text: setupMessage.footer_text });
+    }
 
     if (categories.length === 0) {
       embed.setDescription(

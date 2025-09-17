@@ -106,7 +106,7 @@ const generateAdminSessionToken = (
   adminLevel: number,
 ): string => {
   const sessionId = crypto.randomBytes(32).toString("hex");
-  const expiresAt = Date.now() + 24 * 60 * 60 * 1000; // 24 hours
+  const expiresAt = Date.now() + 30 * 60 * 1000; // 30 minutes
 
   const session: AdminSession = {
     userId,
@@ -582,6 +582,16 @@ const requireGuildAccess = async (
       .json({ error: "No access to this guild - missing guild permissions" });
   }
 
+  // Check if user is server owner (has special permissions)
+  const guild = guildId ? discordClient?.guilds.cache.get(guildId) : null;
+  if (guild && guild.ownerId === user.id) {
+    console.log(
+      `✅ User ${user.username || user.id} is the owner of guild ${guildId} - granting access`,
+    );
+    (req.user as any).isServerOwner = true;
+    return next();
+  }
+
   const hasAccess = user.guilds.some(
     (guild: any) => guild.id === guildId && (guild.permissions & 0x20) === 0x20,
   );
@@ -694,7 +704,7 @@ app.post("/api/admin/session/:guildId", async (req: Request, res: Response) => {
       sessionToken,
       guildId: req.params.guildId,
       adminLevel: adminStatus.level,
-      expiresAt: Date.now() + 24 * 60 * 60 * 1000,
+      expiresAt: Date.now() + 30 * 60 * 1000, // 30 minutes
     });
   } catch (error) {
     console.log(`❌ JWT verification failed:`, error);
@@ -1297,6 +1307,43 @@ app.get(
         .sort((a, b) => b.position - a.position);
 
       console.log(`[DEBUG] Filtered roles count: ${roles.length}`);
+
+      return res.json(roles);
+    } catch (error) {
+      console.error("Get guild roles error:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  },
+);
+
+// Alternative endpoint with /guild/ prefix for better organization
+app.get(
+  "/api/guild/:guildId/roles",
+  requireAuth,
+  requireGuildAccess,
+  async (req: Request, res: Response) => {
+    try {
+      const { guildId } = req.params;
+
+      if (!discordClient || !discordClient.isReady()) {
+        return res.status(503).json({ error: "Discord bot not ready" });
+      }
+
+      // @ts-ignore
+      const guild = discordClient.guilds.cache.get(guildId);
+      if (!guild) {
+        return res.status(404).json({ error: "Guild not found" });
+      }
+
+      const roles = guild.roles.cache
+        .map((role: any) => ({
+          id: role.id,
+          name: role.name,
+          color: role.color,
+          position: role.position,
+          managed: role.managed,
+        }))
+        .sort((a: any, b: any) => b.position - a.position); // Sort by position (highest first)
 
       return res.json(roles);
     } catch (error) {
@@ -1976,6 +2023,365 @@ app.delete(
   },
 );
 
+// Ticket Setup Message endpoints
+app.get(
+  "/api/ticket-setup/:guildId",
+  requireAuth,
+  requireGuildAccess,
+  async (req: Request, res: Response) => {
+    try {
+      const { guildId } = req.params;
+
+      if (!validateGuildId(guildId)) {
+        return res.status(400).json({ error: "Valid Guild ID is required" });
+      }
+
+      const setupMessage = await dbManager.getTicketSetupMessage(guildId);
+      return res.json(setupMessage);
+    } catch (error) {
+      console.error("Get ticket setup message error:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  },
+);
+
+app.put(
+  "/api/ticket-setup/:guildId",
+  requireAuth,
+  requireGuildAccess,
+  async (req: Request, res: Response) => {
+    try {
+      const { guildId } = req.params;
+      const { title, description, color, footerText, isCustom } = req.body;
+
+      if (!validateGuildId(guildId)) {
+        return res.status(400).json({ error: "Valid Guild ID is required" });
+      }
+
+      await dbManager.updateTicketSetupMessage(guildId, {
+        title,
+        description,
+        color,
+        footerText,
+        isCustom,
+      });
+
+      return res.json({ success: true });
+    } catch (error) {
+      console.error("Update ticket setup message error:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  },
+);
+
+app.delete(
+  "/api/ticket-setup/:guildId",
+  requireAuth,
+  requireGuildAccess,
+  async (req: Request, res: Response) => {
+    try {
+      const { guildId } = req.params;
+
+      if (!validateGuildId(guildId)) {
+        return res.status(400).json({ error: "Valid Guild ID is required" });
+      }
+
+      const result = await dbManager.resetTicketSetupMessage(guildId);
+
+      if (result === 0) {
+        return res.status(404).json({ error: "No custom setup message found" });
+      }
+
+      return res.json({ success: true });
+    } catch (error) {
+      console.error("Reset ticket setup message error:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  },
+);
+
+// Auto Role endpoints
+app.get(
+  "/api/autoroles/:guildId",
+  requireAuth,
+  requireGuildAccess,
+  async (req: Request, res: Response) => {
+    try {
+      const { guildId } = req.params;
+
+      if (!guildId) {
+        return res.status(400).json({ error: "Guild ID is required" });
+      }
+
+      const autoRoles = await dbManager.getAutoRoles(guildId);
+      return res.json(autoRoles);
+    } catch (error) {
+      console.error("Get auto roles error:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  },
+);
+
+app.post(
+  "/api/autoroles/:guildId",
+  requireAuth,
+  requireGuildAccess,
+  async (req: Request, res: Response) => {
+    try {
+      const { guildId } = req.params;
+      const { roleId, roleName } = req.body;
+
+      if (!guildId) {
+        return res.status(400).json({ error: "Guild ID is required" });
+      }
+
+      if (!roleId || !roleName) {
+        return res.status(400).json({ error: "Role ID and name are required" });
+      }
+
+      const autoRoleId = await dbManager.addAutoRole(guildId, roleId, roleName);
+      return res.json({ success: true, id: autoRoleId });
+    } catch (error: any) {
+      console.error("Add auto role error:", error);
+      if (error.message.includes("bereits als Auto-Role")) {
+        return res.status(400).json({ error: error.message });
+      }
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  },
+);
+
+app.put(
+  "/api/autoroles/:guildId/:roleId",
+  requireAuth,
+  requireGuildAccess,
+  async (req: Request, res: Response) => {
+    try {
+      const { guildId, roleId } = req.params;
+      const { roleName, isActive } = req.body;
+
+      if (!guildId || !roleId) {
+        return res
+          .status(400)
+          .json({ error: "Guild ID and Role ID are required" });
+      }
+
+      const updateData: { roleName?: string; isActive?: boolean } = {};
+      if (roleName !== undefined) updateData.roleName = roleName;
+      if (isActive !== undefined) updateData.isActive = isActive;
+
+      const result = await dbManager.updateAutoRole(
+        guildId,
+        roleId,
+        updateData,
+      );
+      if (result === 0) {
+        return res.status(404).json({ error: "Auto role not found" });
+      }
+
+      return res.json({ success: true });
+    } catch (error) {
+      console.error("Update auto role error:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  },
+);
+
+app.delete(
+  "/api/autoroles/:guildId/:roleId",
+  requireAuth,
+  requireGuildAccess,
+  async (req: Request, res: Response) => {
+    try {
+      const { guildId, roleId } = req.params;
+
+      if (!guildId || !roleId) {
+        return res
+          .status(400)
+          .json({ error: "Guild ID and Role ID are required" });
+      }
+
+      const result = await dbManager.deleteAutoRole(guildId, roleId);
+      if (result === 0) {
+        return res.status(404).json({ error: "Auto role not found" });
+      }
+
+      return res.json({ success: true });
+    } catch (error) {
+      console.error("Delete auto role error:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  },
+);
+
+// Command Permission endpoints
+app.get(
+  "/api/command-permissions/:guildId",
+  requireAuth,
+  requireGuildAccess,
+  async (req: Request, res: Response) => {
+    try {
+      const { guildId } = req.params;
+
+      if (!guildId) {
+        return res.status(400).json({ error: "Guild ID is required" });
+      }
+
+      const commandPermissions = await dbManager.getCommandPermissions(guildId);
+      return res.json(commandPermissions);
+    } catch (error) {
+      console.error("Get command permissions error:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  },
+);
+
+app.put(
+  "/api/command-permissions/:guildId/:roleId",
+  requireAuth,
+  requireGuildAccess,
+  async (req: Request, res: Response) => {
+    try {
+      const { guildId, roleId } = req.params;
+      const { roleName, allowedCommands, deniedCommands } = req.body;
+
+      if (!guildId || !roleId) {
+        return res
+          .status(400)
+          .json({ error: "Guild ID and Role ID are required" });
+      }
+
+      if (
+        !roleName ||
+        !Array.isArray(allowedCommands) ||
+        !Array.isArray(deniedCommands)
+      ) {
+        return res
+          .status(400)
+          .json({ error: "Role name and command arrays are required" });
+      }
+
+      const commandPermissionId = await dbManager.updateCommandPermissions(
+        guildId,
+        roleId,
+        {
+          roleName,
+          allowedCommands,
+          deniedCommands,
+        },
+      );
+
+      return res.json({ success: true, id: commandPermissionId });
+    } catch (error) {
+      console.error("Update command permissions error:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  },
+);
+
+app.delete(
+  "/api/command-permissions/:guildId/:roleId",
+  requireAuth,
+  requireGuildAccess,
+  async (req: Request, res: Response) => {
+    try {
+      const { guildId, roleId } = req.params;
+
+      if (!guildId || !roleId) {
+        return res
+          .status(400)
+          .json({ error: "Guild ID and Role ID are required" });
+      }
+
+      const result = await dbManager.deleteCommandPermissions(guildId, roleId);
+      if (result === 0) {
+        return res.status(404).json({ error: "Command permissions not found" });
+      }
+
+      return res.json({ success: true });
+    } catch (error) {
+      console.error("Delete command permissions error:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  },
+);
+
+app.get(
+  "/api/available-commands",
+  requireAuth,
+  async (req: Request, res: Response) => {
+    try {
+      // Dynamic command list based on registered commands
+      if (!discordClient) {
+        return res.status(500).json({ error: "Discord client not available" });
+      }
+
+      // Get all registered application commands
+      const applicationCommands =
+        await discordClient.application?.commands.fetch();
+
+      if (!applicationCommands) {
+        // Fallback to static list if application commands not available
+        const availableCommands = [
+          {
+            name: "ticket",
+            description: "Ticket-System verwalten (create, close, setup)",
+          },
+          {
+            name: "autoresponse",
+            description: "Auto-Antworten konfigurieren (add, remove, list)",
+          },
+          {
+            name: "stats",
+            description:
+              "Bot-Statistiken anzeigen (commands, tickets, overview)",
+          },
+          {
+            name: "autorole",
+            description: "Auto-Rollen verwalten (add, remove, list, toggle)",
+          },
+          { name: "embed", description: "Embed-Nachrichten erstellen" },
+          { name: "changelog", description: "Bot-Changelog anzeigen" },
+        ];
+        return res.json(availableCommands);
+      }
+
+      // Convert Discord application commands to our format
+      const availableCommands = applicationCommands.map((command) => ({
+        name: command.name,
+        description: command.description || `${command.name} command`,
+      }));
+
+      return res.json(availableCommands);
+    } catch (error) {
+      console.error("Get available commands error:", error);
+
+      // Fallback to static list on error
+      const availableCommands = [
+        {
+          name: "ticket",
+          description: "Ticket-System verwalten (create, close, setup)",
+        },
+        {
+          name: "autoresponse",
+          description: "Auto-Antworten konfigurieren (add, remove, list)",
+        },
+        {
+          name: "stats",
+          description: "Bot-Statistiken anzeigen (commands, tickets, overview)",
+        },
+        {
+          name: "autorole",
+          description: "Auto-Rollen verwalten (add, remove, list, toggle)",
+        },
+        { name: "embed", description: "Embed-Nachrichten erstellen" },
+        { name: "changelog", description: "Bot-Changelog anzeigen" },
+      ];
+      return res.json(availableCommands);
+    }
+  },
+);
+
 // Health check
 // Version and changelog endpoints
 app.get("/api/version", (req: Request, res: Response) => {
@@ -1998,6 +2404,47 @@ app.get("/api/version", (req: Request, res: Response) => {
 
 // Changelog data - in a real app, this could come from a database or external file
 const changelog = [
+  {
+    version: "1.1.0",
+    date: "2025-09-16",
+    type: "minor",
+    changes: {
+      added: [
+        "Globale UI-Komponenten für einheitliches Button-Design",
+        "Ticket-Setup mit benutzerdefinierten Nachrichten",
+        "API-Endpunkte für Ticket-Setup-Verwaltung",
+        "Erweiterte CSS-Animationen und Hover-Effekte",
+        "Server-Owner Erkennung im Permission-System",
+        "Auto-Role-System: Automatische Rollenzuweisung für neue Server-Mitglieder",
+        "/autorole Slash-Command für Auto-Role-Verwaltung",
+        "Auto-Role API-Endpunkte für Dashboard-Integration",
+        "GuildMemberAdd Event-Handler für automatische Rollenzuweisung",
+        "Auto-Roles Dashboard-Seite mit CRUD-Funktionalität",
+        "Command-Permission System für granulare Befehlskontrolle pro Rolle",
+        "Command-Permissions Dashboard für rollenbasierte Command-Verwaltung",
+        "API-Endpunkte für Command-Permission-Verwaltung",
+        "Erweiterte Navigation mit neuen Dashboard-Seiten",
+      ],
+      changed: [
+        "Admin sessions now limited to 30 minutes instead of 24 hours for better security",
+        "Verbesserte Farbkonvertierung für Ticket-Kategorien",
+        "Permission-System bereinigt (entfernte veraltete Webhook-Referenzen)",
+        "UI-Übergänge und Animationen optimiert",
+        "Kompakteres und cleaneres Design",
+        "Erweiterte Discord-Bot Intents um GuildMembers für Auto-Role-Funktionalität",
+        "Permission-System erweitert um Command-basierte Zugriffskontrolle",
+        "Dashboard-Navigation um Auto-Roles und Command-Permissions erweitert",
+        "Command-Ausführung berücksichtigt jetzt rollenbasierte Permissions",
+      ],
+      fixed: [
+        "Discord-Farbdarstellung bei Ticket-Embeds",
+        "Server-Owner Zugriffsrechte im Dashboard",
+        "Permission-Checks für verschiedene Benutzerrollen",
+        "Hex-zu-Integer Farbkonvertierung für Discord",
+      ],
+      removed: ["Veraltete Webhook-Permissions aus Permission-System"],
+    },
+  },
   {
     version: "1.0.0",
     date: "2025-09-12",
