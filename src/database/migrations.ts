@@ -78,11 +78,13 @@ export async function initializeGuildDefaults(guildId: string) {
     // Initialize default guild settings if they don't exist
     const existingSettings = await dbManager.getGuildSettings(guildId);
 
-    // If guild settings don't exist in database, create them
-    if (!existingSettings.id) {
+    // If guild settings don't exist in database, create them (FIRST TIME SETUP)
+    const isFirstTimeSetup = !existingSettings.id;
+    
+    if (isFirstTimeSetup) {
       const defaultFeatures = [
         "tickets",
-        "autoresponses",
+        "autoresponses", 
         "statistics",
         "webhooks",
       ];
@@ -94,97 +96,109 @@ export async function initializeGuildDefaults(guildId: string) {
         defaultSettings,
       );
       console.log(`✅ Default guild settings created for guild ${guildId}`);
-    }
 
-    // Check if guild already has auto responses
-    const existingResponses = (await dbManager.getAutoResponses(
-      guildId,
-    )) as any[];
-
-    if (existingResponses.length === 0) {
-      // Add default auto responses
-      const defaultResponses = [
-        {
-          trigger: "hallo",
-          response: "Hallo! Wie kann ich dir helfen?",
-          isEmbed: false,
-          guildId,
-        },
-        {
-          trigger: "help",
-          response: "Bot Hilfe",
-          isEmbed: true,
-          embedTitle: "🤖 Bot Hilfe",
-          embedDescription:
-            "Verfügbare Befehle:\n\n`/ticket create` - Erstelle ein Ticket\n`/embed` - Erstelle ein Embed\n`/autoresponse` - Verwalte automatische Antworten\n`/webhook` - Verwalte Webhooks\n`/stats` - Zeige Statistiken",
-          embedColor: 0x00ae86,
-          guildId,
-        },
-        {
-          trigger: "danke",
-          response: "Gerne! 😊",
-          isEmbed: false,
-          guildId,
-        },
-      ];
-
-      for (const response of defaultResponses) {
-        await dbManager.addAutoResponse(response);
-      }
-
-      console.log(`✅ Default auto responses created for guild ${guildId}`);
-    }
-
-    // Check if guild already has ticket categories
-    const existingCategories = await dbManager.getTicketCategories(guildId);
-
-    if (existingCategories.length === 0) {
-      // Add default ticket categories
-      const defaultCategories = [
-        {
-          guildId,
-          name: "Allgemeine Hilfe",
-          description: "Allgemeine Fragen und Support",
-          emoji: "❓",
-          color: "#5865F2",
-          sortOrder: 0,
-        },
-        {
-          guildId,
-          name: "Technische Probleme",
-          description: "Hilfe bei technischen Schwierigkeiten",
-          emoji: "🔧",
-          color: "#ED4245",
-          sortOrder: 1,
-        },
-        {
-          guildId,
-          name: "Moderation",
-          description: "Meldungen und Moderationsanfragen",
-          emoji: "🛡️",
-          color: "#FEE75C",
-          sortOrder: 2,
-        },
-        {
-          guildId,
-          name: "Feedback",
-          description: "Vorschläge und Feedback",
-          emoji: "💡",
-          color: "#57F287",
-          sortOrder: 3,
-        },
-      ];
-
-      for (const category of defaultCategories) {
-        await dbManager.createTicketCategory(category);
-      }
-
-      console.log(`✅ Default ticket categories created for guild ${guildId}`);
+      // Only add default data during FIRST TIME SETUP
+      await addDefaultAutoResponses(guildId);
+      await addDefaultTicketCategories(guildId);
+    } else {
+      console.log(`ℹ️  Guild ${guildId} already initialized, skipping defaults`);
     }
   } catch (error) {
     console.error(
       `❌ Error initializing defaults for guild ${guildId}:`,
       error,
     );
+  }
+}
+
+/**
+ * Add default auto responses for a new guild
+ */
+async function addDefaultAutoResponses(guildId: string) {
+  try {
+    // Add default auto responses
+    const defaultResponses = [
+      {
+        trigger: "hallo",
+        response: "Hallo! Wie kann ich dir helfen?",
+        isEmbed: false,
+        guildId,
+      },
+      {
+        trigger: "help",
+        response: "Bot Hilfe",
+        isEmbed: true,
+        embedTitle: "🤖 Bot Hilfe",
+        embedDescription:
+          "Verfügbare Befehle:\n\n`/ticket create` - Erstelle ein Ticket\n`/embed` - Erstelle ein Embed\n`/autoresponse` - Verwalte automatische Antworten\n`/webhook` - Verwalte Webhooks\n`/stats` - Zeige Statistiken",
+        embedColor: 0x00ae86,
+        guildId,
+      },
+      {
+        trigger: "danke",
+        response: "Gerne! 😊",
+        isEmbed: false,
+        guildId,
+      },
+    ];
+
+    for (const response of defaultResponses) {
+      await dbManager.addAutoResponse(response);
+    }
+
+    console.log(`✅ Default auto responses created for guild ${guildId}`);
+  } catch (error) {
+    console.error(`❌ Error adding default auto responses for guild ${guildId}:`, error);
+  }
+}
+
+/**
+ * Add default ticket categories for a new guild
+ */
+async function addDefaultTicketCategories(guildId: string) {
+  try {
+    // Add default ticket categories
+    const defaultCategories = [
+      {
+        guildId,
+        name: "Allgemeine Hilfe",
+        description: "Allgemeine Fragen und Support",
+        emoji: "❓",
+        color: "#5865F2",
+        sortOrder: 0,
+      },
+      {
+        guildId,
+        name: "Technische Probleme",
+        description: "Hilfe bei technischen Schwierigkeiten",
+        emoji: "🔧",
+        color: "#ED4245",
+        sortOrder: 1,
+      },
+      {
+        guildId,
+        name: "Moderation",
+        description: "Meldungen und Moderationsanfragen",
+        emoji: "🛡️",
+        color: "#FEE75C",
+        sortOrder: 2,
+      },
+      {
+        guildId,
+        name: "Feedback",
+        description: "Vorschläge und Feedback",
+        emoji: "💡",
+        color: "#57F287",
+        sortOrder: 3,
+      },
+    ];
+
+    for (const category of defaultCategories) {
+      await dbManager.createTicketCategory(category);
+    }
+
+    console.log(`✅ Default ticket categories created for guild ${guildId}`);
+  } catch (error) {
+    console.error(`❌ Error adding default ticket categories for guild ${guildId}:`, error);
   }
 }

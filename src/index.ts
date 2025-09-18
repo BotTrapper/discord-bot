@@ -35,6 +35,8 @@ import * as statsCommand from "./commands/stats.js";
 import * as changelogCommand from "./commands/changelog.js";
 import * as autoroleCommand from "./commands/autorole.js";
 import * as bottrapperCommand from "./commands/bottrapper.js";
+import * as tosCommand from "./commands/tos.js";
+import * as dataCommand from "./commands/data.js";
 import "dotenv/config";
 
 // Function to safely convert hex color to Discord integer
@@ -78,6 +80,8 @@ commands.set(statsCommand.data.name, statsCommand);
 commands.set(changelogCommand.data.name, changelogCommand);
 commands.set(autoroleCommand.data.name, autoroleCommand);
 commands.set(bottrapperCommand.data.name, bottrapperCommand);
+commands.set(tosCommand.data.name, tosCommand);
+commands.set(dataCommand.data.name, dataCommand);
 
 // Map commands to their required features
 const COMMAND_FEATURE_MAP: Record<string, string> = {
