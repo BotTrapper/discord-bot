@@ -5,13 +5,6 @@ import {
   Routes,
   Collection,
   type Interaction,
-  EmbedBuilder,
-  ActionRowBuilder,
-  ButtonBuilder,
-  ButtonStyle,
-  MessageFlags,
-  ChannelType,
-  PermissionFlagsBits,
 } from "discord.js";
 import { AutoResponseFeature } from "./features/autoResponse.js";
 import { PermissionManager } from "./features/permissionManager.js";
@@ -28,6 +21,9 @@ import {
   setRegisterGuildCommandsFunction,
 } from "./api/server.js";
 import { versionManager } from "./utils/version.js";
+import { handleButtonInteraction } from "./handlers/buttonHandler.js";
+import { handleModalInteraction } from "./handlers/modalHandler.js";
+import { NOTIFICATION_STARTUP_DELAY_MS } from "./config/constants.js";
 import * as ticketCommand from "./commands/ticket.js";
 import * as embedCommand from "./commands/embed.js";
 import * as autoresponseCommand from "./commands/autoresponse.js";
@@ -38,29 +34,6 @@ import * as bottrapperCommand from "./commands/bottrapper.js";
 import * as tosCommand from "./commands/tos.js";
 import * as dataCommand from "./commands/data.js";
 import "dotenv/config";
-
-// Function to safely convert hex color to Discord integer
-function hexToDiscordColor(hexColor: string): number {
-  try {
-    // Remove # if present and ensure it's valid
-    const cleanHex = hexColor.replace("#", "").trim();
-
-    // Validate hex format (6 characters)
-    if (!/^[0-9A-Fa-f]{6}$/.test(cleanHex)) {
-      console.warn(
-        `Invalid hex color: ${hexColor}, using default Discord blurple`,
-      );
-      return 0x5865f2; // Discord blurple as fallback
-    }
-
-    const colorInt = parseInt(cleanHex, 16);
-    console.log(`Converting color ${hexColor} to Discord integer: ${colorInt}`);
-    return colorInt;
-  } catch (error) {
-    console.warn(`Error parsing color ${hexColor}:`, error);
-    return 0x5865f2; // Discord blurple as fallback
-  }
-}
 
 const client = new Client({
   intents: [
@@ -185,202 +158,6 @@ async function initializeGuildData() {
   }
 }
 
-// Function to generate channel transcript
-async function generateChannelTranscript(channel: any): Promise<string> {
-  try {
-    console.log(`🔄 Generating transcript for channel ${channel.name}...`);
-
-    // Fetch all messages from the channel
-    const messages: any[] = [];
-    let lastMessageId: string | undefined;
-
-    // Discord API allows fetching max 100 messages per request
-    while (true) {
-      const options: any = { limit: 100 };
-      if (lastMessageId) {
-        options.before = lastMessageId;
-      }
-
-      const fetchedMessages = await channel.messages.fetch(options);
-
-      if (fetchedMessages.size === 0) {
-        break;
-      }
-
-      messages.push(...Array.from(fetchedMessages.values()));
-      lastMessageId = fetchedMessages.last()?.id;
-
-      // Safety limit to prevent infinite loops or extremely large transcripts
-      if (messages.length > 1000) {
-        console.log(
-          `⚠️ Transcript limited to 1000 messages for channel ${channel.name}`,
-        );
-        break;
-      }
-    }
-
-    // Sort messages by creation time (oldest first)
-    messages.sort((a, b) => a.createdTimestamp - b.createdTimestamp);
-
-    // Create a member cache for ID resolution
-    const memberCache = new Map();
-    try {
-      // Fetch guild members for ID resolution
-      if (channel.guild) {
-        const members = await channel.guild.members.fetch();
-        members.forEach((member: any) => {
-          memberCache.set(member.id, {
-            username: member.user.username,
-            displayName: member.displayName,
-            nickname: member.nickname,
-          });
-        });
-        console.log(`✅ Cached ${memberCache.size} members for ID resolution`);
-      }
-    } catch (memberError) {
-      console.warn(
-        "⚠️ Could not fetch guild members for ID resolution:",
-        memberError,
-      );
-    }
-
-    // Function to resolve mentions in text
-    const resolveMentions = (text: string): string => {
-      if (!text) return text;
-
-      // Resolve user mentions <@123123> and <@!123123>
-      text = text.replace(/<@!?(\d+)>/g, (match, userId) => {
-        const member = memberCache.get(userId);
-        if (member) {
-          return `@${member.displayName || member.username}`;
-        }
-        return match; // Keep original if not found
-      });
-
-      // Resolve channel mentions <#123123>
-      text = text.replace(/<#(\d+)>/g, (match, channelId) => {
-        if (channel.guild) {
-          const mentionedChannel = channel.guild.channels.cache.get(channelId);
-          if (mentionedChannel) {
-            return `#${mentionedChannel.name}`;
-          }
-        }
-        return match; // Keep original if not found
-      });
-
-      // Resolve role mentions <@&123123>
-      text = text.replace(/<@&(\d+)>/g, (match, roleId) => {
-        if (channel.guild) {
-          const role = channel.guild.roles.cache.get(roleId);
-          if (role) {
-            return `@${role.name}`;
-          }
-        }
-        return match; // Keep original if not found
-      });
-
-      return text;
-    };
-
-    // Generate structured transcript data as JSON
-    const transcriptData = {
-      header: {
-        channelName: channel.name,
-        channelId: channel.id,
-        guildName: channel.guild?.name,
-        generated: new Date().toISOString(),
-        totalMessages: messages.length,
-        memberCount: memberCache.size,
-      },
-      messages: messages.map((message) => ({
-        id: message.id,
-        timestamp: message.createdAt.toISOString(),
-        author: {
-          id: message.author.id,
-          username: message.author.username,
-          discriminator: message.author.discriminator,
-          avatar: message.author.avatar,
-          bot: message.author.bot,
-          displayName: message.member?.displayName || message.author.username,
-        },
-        content: resolveMentions(message.content), // Resolve mentions in content
-        attachments: message.attachments.map((attachment: any) => ({
-          id: attachment.id,
-          name: attachment.name,
-          url: attachment.url,
-          proxyUrl: attachment.proxyUrl,
-          size: attachment.size,
-          contentType: attachment.contentType,
-          width: attachment.width,
-          height: attachment.height,
-        })),
-        embeds: message.embeds.map((embed: any) => ({
-          title: embed.title ? resolveMentions(embed.title) : undefined,
-          description: embed.description
-            ? resolveMentions(embed.description)
-            : undefined,
-          url: embed.url,
-          color: embed.color,
-          timestamp: embed.timestamp,
-          footer: embed.footer
-            ? {
-                text: resolveMentions(embed.footer.text),
-                iconURL: embed.footer.iconURL,
-              }
-            : undefined,
-          image: embed.image,
-          thumbnail: embed.thumbnail,
-          author: embed.author
-            ? {
-                name: resolveMentions(embed.author.name),
-                url: embed.author.url,
-                iconURL: embed.author.iconURL,
-              }
-            : undefined,
-          fields: embed.fields?.map((field: any) => ({
-            name: resolveMentions(field.name),
-            value: resolveMentions(field.value),
-            inline: field.inline,
-          })),
-        })),
-        reactions: message.reactions.cache.map((reaction: any) => ({
-          emoji: {
-            name: reaction.emoji.name,
-            id: reaction.emoji.id,
-            animated: reaction.emoji.animated,
-          },
-          count: reaction.count,
-        })),
-        edited: message.editedTimestamp ? message.editedAt.toISOString() : null,
-        pinned: message.pinned,
-        type: message.type,
-      })),
-    };
-
-    console.log(
-      `✅ Generated structured transcript with ${messages.length} messages for channel ${channel.name}`,
-    );
-    console.log(
-      `✅ Resolved mentions using ${memberCache.size} cached members`,
-    );
-    return JSON.stringify(transcriptData, null, 2);
-  } catch (error) {
-    console.error("Error generating transcript:", error);
-
-    // Return a basic error transcript rather than failing completely
-    const errorData = {
-      header: {
-        channelName: channel?.name || "Unknown",
-        error: error instanceof Error ? error.message : "Unknown error",
-        generated: new Date().toISOString(),
-      },
-      messages: [],
-    };
-
-    return JSON.stringify(errorData, null, 2);
-  }
-}
-
 // Starte den API Server und verbinde den Discord Client
 async function main() {
   try {
@@ -412,7 +189,7 @@ async function main() {
       // Check and send automatic version notifications
       setTimeout(async () => {
         await notificationManager.checkAndSendVersionNotifications();
-      }, 5000); // Wait 5 seconds after startup to ensure everything is ready
+      }, NOTIFICATION_STARTUP_DELAY_MS); // Wait for startup to ensure everything is ready
 
       console.log("🚀 Bot is fully ready!");
     });
@@ -557,235 +334,12 @@ async function main() {
 
       // Handle button interactions
       if (interaction.isButton()) {
-        if (interaction.customId === "close_ticket") {
-          // Check if tickets feature is enabled for this guild
-          const isTicketFeatureEnabled = await featureManager.isFeatureEnabled(
-            interaction.guild!.id,
-            "tickets",
-          );
-          if (!isTicketFeatureEnabled) {
-            await interaction.reply({
-              content:
-                "⛔ Das Ticket-System ist für diesen Server deaktiviert.",
-              flags: 64,
-            });
-            return;
-          }
-
-          const channel = interaction.channel;
-
-          if (
-            !channel ||
-            !("name" in channel) ||
-            !channel.name?.startsWith("ticket-")
-          ) {
-            await interaction.reply({
-              content:
-                "❌ Dieser Button kann nur in Ticket-Kanälen verwendet werden!",
-              flags: 64,
-            });
-            return;
-          }
-
-          // Sofortiger Reply um Timeout zu vermeiden
-          await interaction.deferReply({ flags: 64 });
-
-          // Find ticket in database and close it
-          try {
-            const tickets = (await dbManager.getTickets(
-              interaction.guild!.id,
-              "open",
-            )) as any[];
-            const ticket = tickets.find((t) => t.channel_id === channel.id);
-
-            if (ticket) {
-              // Generate transcript BEFORE closing the ticket
-              console.log(
-                `🔄 Generating transcript for ticket ${ticket.id} in channel ${channel.name}...`,
-              );
-              try {
-                const transcript = await generateChannelTranscript(channel);
-                await dbManager.saveTicketTranscript(ticket.id, transcript);
-                console.log(`✅ Transcript saved for ticket ${ticket.id}`);
-              } catch (transcriptError) {
-                console.error(
-                  "❌ Error generating/saving transcript:",
-                  transcriptError,
-                );
-                // Continue with closing even if transcript fails
-              }
-
-              await dbManager.closeTicket(ticket.id);
-              console.log(`✅ Ticket ${ticket.id} closed successfully`);
-
-              // Since Discord bot can write directly to channels, we don't need external webhooks
-              console.log(
-                `🎫 Ticket ${ticket.id} was closed by ${interaction.user.username}`,
-              );
-            } else {
-              console.log(`⚠️ No open ticket found for channel ${channel.id}`);
-            }
-          } catch (error) {
-            console.error("Error closing ticket in database:", error);
-          }
-
-          await interaction.editReply({
-            content: "🔒 Ticket wird in 5 Sekunden geschlossen...",
-          });
-
-          setTimeout(async () => {
-            try {
-              await channel.delete();
-            } catch (error) {
-              console.error("Error deleting channel:", error);
-            }
-          }, 5000);
-        }
-
-        // Kategorie-Ticket Button Handler
-        if (interaction.customId?.startsWith("create_ticket_")) {
-          // Check if tickets feature is enabled for this guild
-          const isTicketFeatureEnabled = await featureManager.isFeatureEnabled(
-            interaction.guild!.id,
-            "tickets",
-          );
-          if (!isTicketFeatureEnabled) {
-            await interaction.reply({
-              content:
-                "⛔ Das Ticket-System ist für diesen Server deaktiviert.",
-              flags: 64,
-            });
-            return;
-          }
-
-          const categoryId = interaction.customId.replace("create_ticket_", "");
-
-          // Import der createCategoryTicket Funktion
-          const { createCategoryTicket } = await import("./commands/ticket.js");
-          await createCategoryTicket(interaction, categoryId);
-        }
-
-        // Legacy Button (für Rückwärtskompatibilität)
-        if (interaction.customId === "create_ticket_button") {
-          await interaction.reply({
-            content:
-              "Verwende das neue Ticket-System mit Kategorien! Führe `/ticket setup` aus.",
-            flags: 64,
-          });
-        }
+        await handleButtonInteraction(interaction);
       }
 
       // Handle modal submissions
       if (interaction.isModalSubmit()) {
-        if (interaction.customId?.startsWith("create_ticket_modal_")) {
-          const categoryId = interaction.customId.replace(
-            "create_ticket_modal_",
-            "",
-          );
-          const subject =
-            interaction.fields.getTextInputValue("ticket_subject");
-          const description =
-            interaction.fields.getTextInputValue("ticket_description");
-
-          try {
-            // Get category from database
-            const category = await dbManager.getTicketCategoryById(
-              parseInt(categoryId),
-              interaction.guild!.id,
-            );
-
-            if (!category) {
-              await interaction.reply({
-                content: "❌ Kategorie nicht gefunden.",
-                flags: MessageFlags.Ephemeral,
-              });
-              return;
-            }
-
-            // Defer reply
-            await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-
-            // Generate unique ticket channel name
-            const timestamp = Date.now();
-            const shortId = timestamp.toString().slice(-6);
-            const ticketChannelName = `ticket-${category.name.toLowerCase().replace(/[^a-z0-9]/g, "")}-${interaction.user.username.toLowerCase()}-${shortId}`;
-
-            // Create ticket channel
-            const ticketChannel = await interaction.guild!.channels.create({
-              name: ticketChannelName,
-              type: 0, // Text channel
-              topic: `${category.emoji || "🎫"} ${category.name} | Erstellt von ${interaction.user.tag}`,
-              permissionOverwrites: [
-                {
-                  id: interaction.guild!.roles.everyone.id,
-                  deny: ["ViewChannel"],
-                },
-                {
-                  id: interaction.user.id,
-                  allow: ["ViewChannel", "SendMessages"],
-                },
-              ],
-            });
-
-            // Save to database
-            const ticketId = await dbManager.createTicket({
-              userId: interaction.user.id,
-              username: interaction.user.username,
-              reason: `${subject}: ${description}`,
-              channelId: ticketChannel.id,
-              guildId: interaction.guild!.id,
-              categoryId: category.id,
-            });
-
-            // Create welcome embed with correct color parsing
-            const welcomeEmbed = new EmbedBuilder()
-              .setTitle(`${category.emoji || "🎫"} ${category.name} Ticket`)
-              .setDescription(
-                `Willkommen ${interaction.user}! Dein Ticket wurde erstellt.`,
-              )
-              .setColor(hexToDiscordColor(category.color))
-              .addFields([
-                { name: "Ticket ID", value: `#${ticketId}`, inline: true },
-                { name: "Kategorie", value: category.name, inline: true },
-                { name: "Betreff", value: subject, inline: true },
-                { name: "Beschreibung", value: description, inline: false },
-                {
-                  name: "Erstellt von",
-                  value: interaction.user.tag,
-                  inline: true,
-                },
-              ])
-              .setTimestamp()
-              .setFooter({
-                text: "Um das Ticket zu schließen, verwende den Button unten.",
-              });
-
-            // Create close button
-            const closeButton =
-              new ActionRowBuilder<ButtonBuilder>().addComponents(
-                new ButtonBuilder()
-                  .setCustomId("close_ticket")
-                  .setLabel("Ticket schließen")
-                  .setStyle(ButtonStyle.Danger)
-                  .setEmoji("🔒"),
-              );
-
-            await ticketChannel.send({
-              embeds: [welcomeEmbed],
-              components: [closeButton],
-            });
-
-            await interaction.editReply({
-              content: `✅ Ticket erfolgreich erstellt! <#${ticketChannel.id}>`,
-            });
-          } catch (error) {
-            console.error("Error creating ticket from modal:", error);
-            await interaction.editReply({
-              content:
-                "❌ Fehler beim Erstellen des Tickets. Bitte versuche es erneut.",
-            });
-          }
-        }
+        await handleModalInteraction(interaction);
       }
     });
 
