@@ -80,7 +80,7 @@ export async function handleCloseTicketButton(interaction: ButtonInteraction): P
   }
 
   await interaction.editReply({
-    content: "🔒 Ticket wird in 5 Sekunden geschlossen...",
+    content: `🔒 Ticket wird in ${TICKET_CLOSE_DELAY_MS / 1000} Sekunden geschlossen...`,
   });
 
   setTimeout(async () => {
