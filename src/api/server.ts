@@ -1,5 +1,5 @@
 import "dotenv/config";
-import express, { Request, Response, NextFunction } from "express";
+import express, { Request, Response, NextFunction, Router } from "express";
 import cors from "cors";
 // @ts-ignore - No type definitions available
 import session from "express-session";
@@ -19,6 +19,8 @@ import {
 import { versionManager } from "../utils/version.js";
 import type { Client, Snowflake } from "discord.js";
 import crypto from "crypto";
+import { logger, generateRequestId, createRequestLogger } from "../utils/logger.js";
+import { initSentry, captureException } from "../utils/sentry.js";
 
 // Type definitions for untyped modules
 interface DiscordProfile {
@@ -40,14 +42,31 @@ interface CustomUser {
   refreshToken?: string;
 }
 
-// Request logging middleware
+// Extend Request type to include requestId
+declare global {
+  namespace Express {
+    interface Request {
+      requestId?: string;
+    }
+  }
+}
+
+// Request ID middleware
+const requestIdMiddleware = (req: Request, res: Response, next: NextFunction) => {
+  const requestId = generateRequestId();
+  req.requestId = requestId;
+  res.setHeader("X-Request-ID", requestId);
+  next();
+};
+
+// Request logging middleware with structured logging
 const requestLogger = (req: Request, res: Response, next: NextFunction) => {
   const startTime = Date.now();
-  const timestamp = new Date().toISOString();
+  const requestLog = createRequestLogger(req.requestId || "unknown");
 
   // Only log in development
   if (process.env.NODE_ENV !== "production") {
-    console.log(`[${timestamp}] ${req.method} ${req.url} - Request started`);
+    requestLog.info(`${req.method} ${req.url} - Request started`);
   }
 
   // Override res.json and res.send to log response
@@ -57,9 +76,7 @@ const requestLogger = (req: Request, res: Response, next: NextFunction) => {
   res.json = function (body: any) {
     const duration = Date.now() - startTime;
     if (process.env.NODE_ENV !== "production") {
-      console.log(
-        `[${new Date().toISOString()}] ${req.method} ${req.url} - ${res.statusCode} - ${duration}ms`,
-      );
+      requestLog.info(`${req.method} ${req.url} - ${res.statusCode}`, { duration });
     }
     return originalJson.call(this, body);
   };
@@ -67,24 +84,40 @@ const requestLogger = (req: Request, res: Response, next: NextFunction) => {
   res.send = function (body: any) {
     const duration = Date.now() - startTime;
     if (process.env.NODE_ENV !== "production") {
-      console.log(
-        `[${new Date().toISOString()}] ${req.method} ${req.url} - ${res.statusCode} - ${duration}ms`,
-      );
+      requestLog.info(`${req.method} ${req.url} - ${res.statusCode}`, { duration });
     }
     return originalSend.call(this, body);
   };
 
   // Log if request takes too long (keep this in production for debugging)
   const timeoutWarning = setTimeout(() => {
-    console.warn(
-      `[WARNING] ${req.method} ${req.url} - Request taking longer than 5 seconds`,
-    );
+    requestLog.warn(`${req.method} ${req.url} - Request taking longer than 5 seconds`);
   }, 5000);
 
   res.on("finish", () => {
     clearTimeout(timeoutWarning);
   });
 
+  next();
+};
+
+// Deprecation header middleware for legacy /api routes
+const deprecationMiddleware = (req: Request, res: Response, next: NextFunction) => {
+  // Only add deprecation header if accessing legacy /api routes (not /api/v1)
+  if (req.path.startsWith("/api/") && !req.path.startsWith("/api/v1/")) {
+    res.setHeader(
+      "Deprecation",
+      "true"
+    );
+    res.setHeader(
+      "Sunset",
+      "2025-06-01"
+    );
+    res.setHeader(
+      "Link",
+      '</api/v1/>; rel="successor-version"'
+    );
+  }
   next();
 };
 
@@ -226,6 +259,8 @@ app.use(
 app.use(express.json());
 
 // Configure session with PostgreSQL store
+const isProduction = process.env.NODE_ENV === "production";
+
 app.use(
   session({
     store: new PgSession({
@@ -238,10 +273,13 @@ app.use(
     saveUninitialized: false,
     rolling: true, // Reset expiry on each request
     cookie: {
-      secure: process.env.NODE_ENV === "production",
-      httpOnly: true,
+      secure: isProduction, // Only send over HTTPS in production
+      httpOnly: true, // Prevent client-side access
       maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+      sameSite: isProduction ? "strict" : "lax", // Stricter in production
+      domain: isProduction ? undefined : undefined, // Use default domain handling
     },
+    name: "bottrapper.sid", // Custom session cookie name
   }),
 );
 
@@ -258,7 +296,10 @@ if (process.env.NODE_ENV !== "production") {
   });
 }
 
+// Apply request ID and logging middleware
+app.use(requestIdMiddleware);
 app.use(requestLogger);
+app.use(deprecationMiddleware);
 
 // Discord OAuth Strategy
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
@@ -3158,9 +3199,45 @@ app.post(
   },
 );
 
+// === API VERSION 1 ROUTER ===
+// All /api routes are also available under /api/v1 for versioned access
+const v1Router = Router();
+
+// Version and changelog endpoints (v1)
+v1Router.get("/version", (req: Request, res: Response) => {
+  try {
+    const versionInfo = versionManager.getVersionInfo();
+    const uptime = versionManager.getUptimeString();
+
+    res.json({
+      version: versionInfo.version,
+      name: versionInfo.name,
+      description: versionInfo.description,
+      startTime: versionInfo.startTime.toISOString(),
+      uptime: uptime,
+      apiVersion: "v1",
+    });
+  } catch (error) {
+    console.error("Error getting version info:", error);
+    res.status(500).json({ error: "Failed to get version information" });
+  }
+});
+
+v1Router.get("/health", (req: Request, res: Response) => {
+  res.json({ status: "OK", timestamp: new Date().toISOString(), apiVersion: "v1" });
+});
+
+// Mount the v1 router under /api/v1
+app.use("/api/v1", v1Router);
+
 export function startApiServer() {
+  // Initialize Sentry if DSN is provided
+  initSentry();
+  
   app.listen(PORT, () => {
-    console.log(`🚀 API Server running on port ${PORT}`);
+    logger.info(`🚀 API Server running on port ${PORT}`);
+    logger.info(`📌 API v1 available at /api/v1`);
+    logger.info(`⚠️  Legacy API at /api (deprecated)`);
   });
 }
 

@@ -21,6 +21,8 @@ import {
   setRegisterGuildCommandsFunction,
 } from "./api/server.js";
 import { versionManager } from "./utils/version.js";
+import { logger } from "./utils/logger.js";
+import { initSentry, captureException, flush as flushSentry } from "./utils/sentry.js";
 import { handleButtonInteraction } from "./handlers/buttonHandler.js";
 import { handleModalInteraction } from "./handlers/modalHandler.js";
 import { NOTIFICATION_STARTUP_DELAY_MS } from "./config/constants.js";
@@ -34,6 +36,9 @@ import * as bottrapperCommand from "./commands/bottrapper.js";
 import * as tosCommand from "./commands/tos.js";
 import * as dataCommand from "./commands/data.js";
 import "dotenv/config";
+
+// Initialize Sentry error tracking (if SENTRY_DSN is configured)
+initSentry();
 
 const client = new Client({
   intents: [
@@ -379,19 +384,22 @@ async function main() {
         }
       } catch (error) {
         console.error("Error handling auto response:", error);
+        captureException(error, { context: "auto_response" });
       }
     });
 
     // Handle process termination
-    process.on("SIGINT", () => {
-      console.log("\n🛑 Bot shutting down...");
+    process.on("SIGINT", async () => {
+      logger.info("Bot shutting down...");
+      await flushSentry();
       dbManager.close();
       client.destroy();
       process.exit(0);
     });
 
-    process.on("SIGTERM", () => {
-      console.log("\n🛑 Bot shutting down...");
+    process.on("SIGTERM", async () => {
+      logger.info("Bot shutting down...");
+      await flushSentry();
       dbManager.close();
       client.destroy();
       process.exit(0);
@@ -405,9 +413,11 @@ async function main() {
 
     // Initialize notification manager with client
     notificationManager.setDiscordClient(client);
-    console.log("🔔 Notification manager initialized");
+    logger.info("Notification manager initialized");
   } catch (error) {
-    console.error("❌ Failed to start bot:", error);
+    logger.error("Failed to start bot", { error });
+    captureException(error, { context: "bot_startup" });
+    await flushSentry();
     process.exit(1);
   }
 }
