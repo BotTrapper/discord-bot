@@ -111,7 +111,7 @@ const deprecationMiddleware = (req: Request, res: Response, next: NextFunction) 
     );
     res.setHeader(
       "Sunset",
-      "2025-06-01"
+      "2026-06-01"
     );
     res.setHeader(
       "Link",
@@ -3218,7 +3218,8 @@ v1Router.get("/version", (req: Request, res: Response) => {
       apiVersion: "v1",
     });
   } catch (error) {
-    console.error("Error getting version info:", error);
+    logger.error("Error getting version info", { error });
+    captureException(error, { context: "api_v1_version" });
     res.status(500).json({ error: "Failed to get version information" });
   }
 });

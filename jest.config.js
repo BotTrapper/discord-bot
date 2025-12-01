@@ -37,4 +37,7 @@ export default {
   verbose: true,
   clearMocks: true,
   injectGlobals: true,
+  // Run tests sequentially and in separate processes to avoid shared state issues
+  maxWorkers: 1,
+  forceExit: true,
 };
